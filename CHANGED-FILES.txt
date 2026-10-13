@@ -1,0 +1,13 @@
+ ROADMAP.md                    |    3 +-
+ apps/designcraft/src/main.rs  |    3 +
+ crates/fonts/src/lib.rs       |   14 ++
+ crates/ui-egui/src/i18n.rs    |  255 ++++++++++++++++++++++-
+ crates/ui-egui/src/i18n/ko.rs | 1790 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ crates/ui-egui/src/menus.rs   |   40 ++++
+ crates/ui-egui/src/theme.rs   |  244 +++++++++++++++++++++-
+ crates/ui-egui/src/toolbar.rs |   30 ++-
+ docs/gaps.md                  |    2 +-
+ docs/localization-ko.md       |  139 +++++++++++++
+ docs/localization-parity.md   |    5 +-
+ docs/target-app-parity.md     |    2 +-
+ 12 files changed, 2510 insertions(+), 17 deletions(-)

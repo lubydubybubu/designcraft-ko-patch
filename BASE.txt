@@ -1,0 +1,4 @@
+upstream: https://github.com/storytold/designcraft.git
+tag: v0.7.1
+commit: 3624f488192a8eeade11bd27609c9e5056214e75
+patch: patches/designcraft-v0.7.1-ko.patch

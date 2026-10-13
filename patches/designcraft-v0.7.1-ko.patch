@@ -1,0 +1,2779 @@
+diff --git a/ROADMAP.md b/ROADMAP.md
+index d33353c..f9ef094 100644
+--- a/ROADMAP.md
++++ b/ROADMAP.md
+@@ -96,7 +96,7 @@ Interface strings translated, of 1,724 measured. Detail: [docs/localization-pari
+ | Indonesian | id | none | 0% |
+ | Japanese | ja | partial (no canvas IME) | 95% |
+ | German | de | partial | 83% |
+-| Korean | ko | none | 0% |
++| Korean | ko | partial (no canvas IME) | 99% |
+ | Vietnamese | vi | none | 0% |
+ 
+ Also shipped: Italian (85%), Ukrainian (83%).
+@@ -129,6 +129,7 @@ list) · [roadmap.md](docs/roadmap.md) (milestones, plan) · [parity-checklist.m
+ 
+ Newest first.
+ 
++- **2026-10-13** · Korean interface (Edit › Interface Language › 한국어; 1,763 of the 1,775 strings measured on 0.7.1), from con3code's PR #395 revised to Korean InDesign terms; a first launch on a Korean system starts in Korean; Hangul UI text from an embedded craft-fonts face or, without one, the installed Malgun Gothic (Windows) and other system faces. Canvas IME still missing (#322). Details: [docs/localization-ko.md](docs/localization-ko.md). No readiness percentage change.
+ - **2026-10-12** · Words in capitals hyphenate like capitalized words (FERRUM COM-MODI), as in InDesign; Hyphenate Capitalized Words off keeps them whole. No readiness percentage change.
+ - **2026-10-11** · `transform.move {copy}`, Edit › Duplicate and Step and Repeat return the copies' ids, so a script can go on with them. No readiness percentage change.
+ - **2026-10-11** · `object.fill` and `object.stroke` refuse a swatch name the document doesn't have (it painted nothing) and suggest the name meant (`Paper` → `[Paper]`). No readiness percentage change.
+diff --git a/apps/designcraft/src/main.rs b/apps/designcraft/src/main.rs
+index 35a5686..6542e74 100644
+--- a/apps/designcraft/src/main.rs
++++ b/apps/designcraft/src/main.rs
+@@ -86,6 +86,9 @@ fn load_prefs(app: &mut DesignApp) {
+         && let Ok(ui) = designcraft_ui_egui::UiState::from_preferences_json(&bytes)
+     {
+         app.ui = ui;
++    } else {
++        // First launch: the interface language follows the system locale (Korean for ko-KR).
++        app.ui.language = designcraft_ui_egui::i18n::system_language().to_owned();
+     }
+     // Engine preferences (Preferences dialog, favourites…) live beside the UI state.
+     if let Some(p) = prefs_path().map(|p| p.with_file_name("prefs.json"))
+diff --git a/crates/fonts/src/lib.rs b/crates/fonts/src/lib.rs
+index c1d7447..30c68de 100644
+--- a/crates/fonts/src/lib.rs
++++ b/crates/fonts/src/lib.rs
+@@ -57,6 +57,20 @@ pub fn japanese_ui_fonts(bold: bool) -> Vec<&'static CraftFont> {
+     v
+ }
+ 
++/// The characters of `text` that face `index` of the font file `data` has no glyph for, in
++/// order, each once (all of them when `data` isn't a font). Whitespace and controls are skipped.
++pub fn missing_chars(data: &[u8], index: u32, text: &str) -> Vec<char> {
++    let font = skrifa::FontRef::from_index(data, index).ok();
++    let charmap = font.as_ref().map(|f| f.charmap());
++    let mut missing = Vec::new();
++    for c in text.chars().filter(|c| !c.is_whitespace() && !c.is_control()) {
++        if !charmap.as_ref().is_some_and(|m| m.map(c).is_some()) && !missing.contains(&c) {
++            missing.push(c);
++        }
++    }
++    missing
++}
++
+ /// InDesign's default text font is a serif; ours is Source Serif 4.
+ pub const DEFAULT_FAMILY: &str = "Source Serif 4";
+ 
+diff --git a/crates/ui-egui/src/i18n.rs b/crates/ui-egui/src/i18n.rs
+index e5e8a8d..3574ef7 100644
+--- a/crates/ui-egui/src/i18n.rs
++++ b/crates/ui-egui/src/i18n.rs
+@@ -1,11 +1,13 @@
+ //! Interface language (Edit › Interface Language): translations of menu titles, the most used
+-//! menu items and panel names. Untranslated strings stay English. The translations are our own.
++//! menu items and panel names. Untranslated strings stay English. The translations are our own;
++//! the Korean table (`ko.rs`) builds on con3code's PR #395 (see docs/localization-ko.md).
+ 
+ use std::{collections::HashMap, sync::OnceLock};
+ 
+ mod ar;
+ mod it;
+ mod ja;
++mod ko;
+ mod pt_br;
+ mod uk;
+ 
+@@ -17,6 +19,7 @@ pub const LANGUAGES: &[(&str, &str)] = &[
+     ("es", "Español"),
+     ("ja", "日本語"),
+     ("zh", "简体中文"),
++    ("ko", "한국어"),
+     ("ar", "العربية"),
+     ("pt-br", "Português (Brasil)"),
+     ("it", "Italiano"),
+@@ -2837,6 +2840,7 @@ pub fn tr<'a>(lang: &str, s: &'a str) -> &'a str {
+     static UKRAINIAN: OnceLock<HashMap<&'static str, &'static str>> = OnceLock::new();
+     static PORTUGUESE_BR: OnceLock<HashMap<&'static str, &'static str>> = OnceLock::new();
+     static ITALIAN: OnceLock<HashMap<&'static str, &'static str>> = OnceLock::new();
++    static KOREAN: OnceLock<HashMap<&'static str, &'static str>> = OnceLock::new();
+     if lang == "ar" {
+         return ARABIC.get_or_init(|| ar::TABLE.iter().copied().collect()).get(s).copied().unwrap_or(s);
+     }
+@@ -2853,6 +2857,9 @@ pub fn tr<'a>(lang: &str, s: &'a str) -> &'a str {
+     if lang == "it" {
+         return ITALIAN.get_or_init(|| it::TABLE.iter().copied().collect()).get(s).copied().unwrap_or(s);
+     }
++    if lang == "ko" {
++        return KOREAN.get_or_init(|| ko::TABLE.iter().copied().collect()).get(s).copied().unwrap_or(s);
++    }
+     if lang == "uk" {
+         return UKRAINIAN.get_or_init(|| uk::TABLE.iter().copied().collect()).get(s).copied().unwrap_or(s);
+     }
+@@ -2860,6 +2867,80 @@ pub fn tr<'a>(lang: &str, s: &'a str) -> &'a str {
+     TRANSLATIONS.get_or_init(|| TABLE.iter().copied().collect()).get(s).and_then(|row| row.get(c)).copied().unwrap_or(s)
+ }
+ 
++/// The interface language for a system locale: a POSIX value (`ko_KR.UTF-8`), a BCP 47 tag
++/// (`ko-KR`, Windows' `LocaleName`) or a bare language (`ko`). `None` for English and for
++/// languages, scripts or regions without an interface (`pt_PT`, Traditional Chinese).
++pub fn language_for_locale(locale: &str) -> Option<&'static str> {
++    // `ll_CC.encoding@modifier`: the encoding and modifier don't matter.
++    let tag = locale.trim().split(['.', '@']).next()?;
++    let mut parts = tag.split(['_', '-']);
++    let language = parts.next()?.to_ascii_lowercase();
++    if !(2..=3).contains(&language.len()) || !language.bytes().all(|b| b.is_ascii_lowercase()) {
++        return None;
++    }
++    let rest: Vec<String> = parts.map(str::to_ascii_lowercase).collect();
++    let has = |s: &str| rest.iter().any(|p| p == s);
++    match language.as_str() {
++        "ko" => Some("ko"),
++        "de" => Some("de"),
++        "fr" => Some("fr"),
++        "es" => Some("es"),
++        "ja" => Some("ja"),
++        "ar" => Some("ar"),
++        "it" => Some("it"),
++        "uk" => Some("uk"),
++        "pt" if has("br") => Some("pt-br"),
++        // The interface is Simplified Chinese: Traditional script or regions stay English.
++        "zh" if !["hant", "tw", "hk", "mo"].into_iter().any(has) => Some("zh"),
++        _ => None,
++    }
++}
++
++/// The interface language of the system locale ("" for English): on Windows the user's
++/// `LocaleName` (Settings › Time & language › Region), else the first set of `LC_ALL`,
++/// `LC_MESSAGES` and `LANG`. The app uses it on a first launch.
++pub fn system_language() -> &'static str {
++    system_locale().as_deref().and_then(language_for_locale).unwrap_or("")
++}
++
++fn system_locale() -> Option<String> {
++    #[cfg(windows)]
++    if let Some(name) = windows_locale_name() {
++        return Some(name);
++    }
++    ["LC_ALL", "LC_MESSAGES", "LANG"].into_iter().find_map(|v| std::env::var(v).ok().filter(|s| !s.trim().is_empty()))
++}
++
++/// The user's `LocaleName` from the registry, read with `reg.exe` (no `unsafe` Win32 call).
++#[cfg(windows)]
++fn windows_locale_name() -> Option<String> {
++    use std::os::windows::process::CommandExt;
++    /// No console window flashes up.
++    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
++    let reg = std::env::var_os("SystemRoot")
++        .map_or_else(|| std::path::PathBuf::from("reg"), |root| std::path::PathBuf::from(root).join("System32").join("reg.exe"));
++    let out = std::process::Command::new(reg)
++        .args(["query", r"HKCU\Control Panel\International", "/v", "LocaleName"])
++        .creation_flags(CREATE_NO_WINDOW)
++        .output()
++        .ok()?;
++    locale_name_from_reg(&String::from_utf8_lossy(&out.stdout))
++}
++
++/// `LocaleName` from `reg query` output (`    LocaleName    REG_SZ    ko-KR`).
++#[cfg(any(windows, test))]
++fn locale_name_from_reg(output: &str) -> Option<String> {
++    output.lines().find_map(|line| match line.split_whitespace().collect::<Vec<_>>().as_slice() {
++        [name, "REG_SZ", value] if name.eq_ignore_ascii_case("LocaleName") => Some((*value).to_owned()),
++        _ => None,
++    })
++}
++
++#[cfg(test)]
++pub(crate) fn korean_catalog() -> Vec<&'static str> {
++    ko::TABLE.iter().map(|(_, text)| *text).collect()
++}
++
+ /// Context-sensitive UI captions; unsupported contexts keep the shared translation.
+ pub fn tr_context<'a>(lang: &str, s: &'a str, context: &str) -> &'a str {
+     if lang == "uk" {
+@@ -2874,9 +2955,15 @@ pub(crate) fn ukrainian_catalog() -> Vec<&'static str> {
+ }
+ 
+ /// Count captions in Ukrainian put the category before the value so every count uses
+-/// a grammatical form; other languages keep the existing value-first caption.
++/// a grammatical form, Korean puts the counter 개 after the value; other languages keep the
++/// existing value-first caption.
+ pub fn count_label(lang: &str, noun: &str, count: usize) -> String {
+-    if lang == "uk" { format!("{}: {count}", tr(lang, noun)) } else { format!("{count} {}", tr(lang, noun)) }
++    match lang {
++        "uk" => format!("{}: {count}", tr(lang, noun)),
++        // Korean: noun, number, counter (오류 3개).
++        "ko" => format!("{} {count}개", tr(lang, noun)),
++        _ => format!("{count} {}", tr(lang, noun)),
++    }
+ }
+ 
+ /// Localize reserved built-in style names only; user-defined names are document data.
+@@ -3035,6 +3122,168 @@ mod tests {
+         }
+     }
+ 
++    /// The Korean table: one row per key, a translation for every row, and at least every string
++    /// the Japanese table covers.
++    #[test]
++    fn korean_catalog_covers_the_japanese_one() {
++        assert!(LANGUAGES.contains(&("ko", "한국어")));
++        assert!(!is_rtl("ko"));
++        let mut seen = std::collections::HashSet::new();
++        for (key, text) in ko::TABLE {
++            assert!(seen.insert(*key), "ko: duplicate {key}");
++            assert!(!text.trim().is_empty(), "ko: empty {key}");
++            assert_eq!(tr("ko", key), *text, "ko: {key}");
++        }
++        let missing: Vec<_> = ja::TABLE.iter().map(|(key, _)| *key).filter(|key| !seen.contains(key)).collect();
++        assert!(missing.is_empty(), "ko: {} keys of ja.rs untranslated: {missing:?}", missing.len());
++        // Strings without a row stay English, never another language.
++        let unknown = String::from("A user-defined untranslated label");
++        assert!(std::ptr::eq(tr("ko", &unknown), unknown.as_str()));
++        assert_eq!(tr("ko", "PDF/X-4"), "PDF/X-4");
++    }
++
++    /// Korean rows are for strings the interface shows (a catalog key, a command or menu label,
++    /// a tool name) and keep the placeholders, the trailing ellipsis and the units of the English.
++    #[test]
++    fn korean_rows_are_live_and_keep_placeholders() {
++        let mut keys: std::collections::HashSet<&str> = std::collections::HashSet::new();
++        keys.extend(TABLE.iter().map(|(key, _)| *key));
++        for table in [ar::TABLE, it::TABLE, ja::TABLE, pt_br::TABLE, uk::TABLE] {
++            keys.extend(table.iter().map(|(key, _)| *key));
++        }
++        for c in designcraft_engine::command_specs() {
++            keys.insert(c.label);
++            keys.extend(c.menu.iter().copied());
++        }
++        keys.extend(crate::menus::UI_COMMANDS.iter().map(|c| c.1));
++        keys.extend(designcraft_tools::TOOL_GROUPS.iter().flat_map(|g| g.iter().map(|t| t.label)));
++        // Captions passed to `tr` only (Table panel, Control bar pinning, panel docking, the
++        // unsaved-changes prompt).
++        keys.extend([
++            "Distribute Rows Evenly",
++            "Pin Bar Position",
++            "Reset Bar Position",
++            "Resize panel window",
++            "Resize panels",
++            "Group with",
++            "Unsaved Changes",
++            "Don't Save",
++            "“{}” has changes that are not saved. Save them before closing?",
++        ]);
++        let mut labels = Vec::new();
++        fn walk(items: &[crate::menus::Item], out: &mut Vec<String>) {
++            for it in items {
++                match it {
++                    crate::menus::Item::Sub(title, children) => {
++                        out.push(title.clone());
++                        walk(children, out);
++                    }
++                    crate::menus::Item::Cmd { label, .. } => out.push(label.clone()),
++                    crate::menus::Item::Sep => {}
++                }
++            }
++        }
++        for (title, items) in crate::menus::menu_tree() {
++            labels.push(title.to_string());
++            walk(&items, &mut labels);
++        }
++        let stale: Vec<_> = ko::TABLE.iter().map(|(key, _)| *key).filter(|k| !keys.contains(k) && !labels.iter().any(|l| l == k)).collect();
++        assert!(stale.is_empty(), "ko: rows for strings the interface doesn't show: {stale:?}");
++        let placeholders = |s: &str| {
++            let mut found: Vec<String> = s.split('{').skip(1).filter_map(|part| part.split_once('}').map(|(name, _)| name.to_owned())).collect();
++            found.sort();
++            found
++        };
++        let ellipsis = |s: &str| s.trim_end().ends_with('…') || s.trim_end().ends_with("...");
++        for (key, text) in ko::TABLE {
++            assert_eq!(placeholders(key), placeholders(text), "ko: placeholders of {key}");
++            assert_eq!(ellipsis(key), ellipsis(text), "ko: ellipsis of {key}");
++            // Units, formats and technology names stay as written.
++            for word in ["pt", "mm", "PDF", "IDML", "EPUB", "CMYK", "RGB", "JPEG", "PNG", "SVG", "HTML", "CSV", "ICC", "MCP"] {
++                let count = |s: &str| s.split(|c: char| !c.is_ascii_alphanumeric() && c != '/').filter(|w| *w == word).count();
++                assert!(count(text) >= count(key), "ko: {word} of {key} → {text}");
++            }
++        }
++    }
++
++    /// Korean counts read noun, number, counter: 오류 3개, 페이지 12개.
++    #[test]
++    fn korean_counts_put_the_counter_after_the_number() {
++        for n in [0, 1, 2, 12] {
++            assert_eq!(count_label("ko", "errors", n), format!("오류 {n}개"));
++            assert_eq!(count_label("ko", "error", n), format!("오류 {n}개"));
++            assert_eq!(count_label("ko", "objects", n), format!("개체 {n}개"));
++            assert_eq!(count_label("ko", "pages", n), format!("페이지 {n}개"));
++            assert_eq!(count_label("ko", "warnings", n), format!("경고 {n}개"));
++        }
++        assert_eq!(count_label("de", "objects", 2), "2 objects");
++    }
++
++    /// The Korean interface uses the terms of Korean InDesign; messages are 합니다체.
++    #[test]
++    fn korean_uses_indesign_terminology() {
++        for (en, ko) in [
++            ("File", "파일"),
++            ("Object", "개체"),
++            ("Window", "창"),
++            ("Text Frame", "텍스트 프레임"),
++            ("Paragraph Styles", "단락 스타일"),
++            ("Character Styles", "문자 스타일"),
++            ("Tracking", "자간"),
++            ("Leading", "행간"),
++            ("Kerning", "커닝"),
++            ("Text Wrap", "텍스트 감싸기"),
++            ("Layers", "레이어"),
++            ("Swatches", "견본"),
++            ("Pages", "페이지"),
++            ("Export", "내보내기"),
++            ("Package…", "패키지…"),
++            ("Preflight", "프리플라이트"),
++            ("Bleed", "재단 여백"),
++            ("Slug", "슬러그"),
++            ("New Parent…", "새 상위 페이지…"),
++            ("Selection Tool", "선택 도구"),
++            ("Type Tool", "문자 도구"),
++            ("Unsaved Changes", "저장되지 않은 변경 사항"),
++            ("Don't Save", "저장 안 함"),
++        ] {
++            assert_eq!(tr("ko", en), ko, "{en}");
++        }
++        for (key, text) in ko::TABLE {
++            // 합니다체: no 해요체 endings; one word for each term.
++            for informal in ["세요", "해요", "어요", "아요", "에요", "예요"] {
++                assert!(!text.contains(informal), "ko: {informal} in {key} → {text}");
++            }
++            for old in ["오브젝트", "윈도우", "도련", "사전 검사", "마스터"] {
++                assert!(!text.contains(old), "ko: {old} in {key} → {text}");
++            }
++        }
++    }
++
++    /// System locales pick the interface language on first launch: Korean for `ko`, `ko-KR`,
++    /// `ko_KR.UTF-8` (POSIX `LANG`, Windows `LocaleName`), English for unsupported ones.
++    #[test]
++    fn system_locales_select_the_interface_language() {
++        for locale in ["ko", "ko-KR", "ko_KR", "ko_KR.UTF-8", "ko_KR.utf8", "KO-kr", "ko_KR.EUC-KR@x", " ko-Kore-KR "] {
++            assert_eq!(language_for_locale(locale), Some("ko"), "{locale}");
++        }
++        for (locale, lang) in
++            [("ja_JP.UTF-8", "ja"), ("de-DE", "de"), ("pt_BR.UTF-8", "pt-br"), ("zh_CN.UTF-8", "zh"), ("zh-Hans-SG", "zh"), ("uk_UA", "uk")]
++        {
++            assert_eq!(language_for_locale(locale), Some(lang), "{locale}");
++        }
++        for locale in ["", "C", "POSIX", "C.UTF-8", "en_US.UTF-8", "en-GB", "pt_PT", "zh_TW", "zh-Hant-HK", "kok_IN", "k", "😀", "ko\u{0}"] {
++            assert_eq!(language_for_locale(locale), None, "{locale:?}");
++        }
++        // Windows: `reg query "HKCU\Control Panel\International" /v LocaleName`.
++        let reg = "\r\nHKEY_CURRENT_USER\\Control Panel\\International\r\n    LocaleName    REG_SZ    ko-KR\r\n\r\n";
++        assert_eq!(locale_name_from_reg(reg).as_deref(), Some("ko-KR"));
++        assert_eq!(locale_name_from_reg(reg).as_deref().and_then(language_for_locale), Some("ko"));
++        assert_eq!(locale_name_from_reg("ERROR: The system was unable to find the specified registry key or value."), None);
++        // Whatever comes back is a supported interface language.
++        assert!(LANGUAGES.iter().any(|(code, _)| *code == system_language()));
++    }
++
+     #[test]
+     fn pdf_export_dialog_strings_are_translated() {
+         // Translated labels in every supported language.
+diff --git a/crates/ui-egui/src/i18n/ko.rs b/crates/ui-egui/src/i18n/ko.rs
+new file mode 100644
+index 0000000..ac78c35
+--- /dev/null
++++ b/crates/ui-egui/src/i18n/ko.rs
+@@ -0,0 +1,1790 @@
++//! Korean interface translations (English → Korean).
++//!
++//! Provenance: the rows up to the `DesignCraft 0.7.1` marker come from con3code's
++//! storytold/designcraft PR #395 ("i18n: Traditional Chinese and Korean interfaces; full Chinese
++//! tables", commit 66c4565), revised to Korean InDesign terms (개체, 창, 재단 여백, 프리플라이트)
++//! and 합니다체 messages; the rows after it are new for 0.7.1. See docs/localization-ko.md.
++pub(super) const TABLE: &[(&str, &str)] = &[
++    ("File", "파일"),
++    ("Edit", "편집"),
++    ("Layout", "레이아웃"),
++    ("Type", "문자"),
++    ("Object", "개체"),
++    ("Table", "표"),
++    ("View", "보기"),
++    ("Window", "창"),
++    ("Help", "도움말"),
++    ("New", "새로 만들기"),
++    ("New Document…", "새 문서…"),
++    ("Open…", "열기…"),
++    ("Close", "닫기"),
++    ("Save", "저장"),
++    ("Save As…", "다른 이름으로 저장…"),
++    ("Save a Copy…", "사본 저장…"),
++    ("Revert", "되돌리기"),
++    ("Place…", "가져오기…"),
++    ("Export PDF…", "PDF 내보내기…"),
++    ("Print…", "인쇄…"),
++    ("Document Setup…", "문서 설정…"),
++    ("Package…", "패키지…"),
++    ("Undo", "실행 취소"),
++    ("Redo", "다시 실행"),
++    ("Cut", "잘라내기"),
++    ("Copy", "복사"),
++    ("Paste", "붙여넣기"),
++    ("Clear", "지우기"),
++    ("Duplicate", "복제"),
++    ("Select All", "모두 선택"),
++    ("Deselect All", "모두 선택 해제"),
++    ("Find/Change…", "찾기/바꾸기…"),
++    ("Check Spelling…", "맞춤법 검사…"),
++    ("Preferences…", "환경 설정…"),
++    ("Keyboard Shortcuts…", "키보드 단축키…"),
++    ("Interface Language", "인터페이스 언어"),
++    ("Pages", "페이지"),
++    ("Margins and Columns…", "여백 및 단…"),
++    ("Create Guides…", "안내선 만들기…"),
++    ("Numbering & Section Options…", "페이지 번호 및 섹션 옵션…"),
++    ("Story Direction", "스토리 방향"),
++    ("Horizontal", "가로쓰기"),
++    ("Vertical", "세로쓰기"),
++    ("Tate-Chu-Yoko", "세로 중 가로"),
++    ("Ruby…", "루비…"),
++    ("Kenten", "권점"),
++    ("Font", "글꼴"),
++    ("Size", "크기"),
++    ("Character", "문자"),
++    ("Paragraph", "단락"),
++    ("Tabs", "탭"),
++    ("Glyphs", "글리프"),
++    ("Story", "스토리"),
++    ("Character Styles", "문자 스타일"),
++    ("Paragraph Styles", "단락 스타일"),
++    ("Create Outlines", "윤곽선 만들기"),
++    ("Show Hidden Characters", "숨겨진 문자 표시"),
++    ("Transform", "변형"),
++    ("Arrange", "정돈"),
++    ("Group", "그룹"),
++    ("Ungroup", "그룹 해제"),
++    ("Lock", "잠금"),
++    ("Hide", "숨기기"),
++    ("Effects", "효과"),
++    ("Fitting", "맞춤"),
++    ("Text Frame Options…", "텍스트 프레임 옵션…"),
++    ("Insert Table…", "표 삽입…"),
++    ("Merge Cells", "셀 병합"),
++    ("Unmerge Cells", "셀 병합 해제"),
++    ("Insert", "삽입"),
++    ("Delete", "삭제"),
++    ("Zoom In", "확대"),
++    ("Zoom Out", "축소"),
++    ("Fit Page in Window", "창에 페이지 맞추기"),
++    ("Fit Spread in Window", "창에 펼침면 맞추기"),
++    ("Actual Size", "실제 크기"),
++    ("Screen Mode", "화면 모드"),
++    ("Grids & Guides", "격자 및 안내선"),
++    ("Show Rulers", "눈금자 표시"),
++    ("Snap to Guides", "안내선에 물리기"),
++    ("Snap to Document Grid", "문서 격자에 물리기"),
++    ("Smart Guides", "고급 안내선"),
++    ("Align to Object Edges", "개체 가장자리에 정렬"),
++    ("Align to Object Centers", "개체 중심에 정렬"),
++    ("Smart Dimensions", "고급 치수"),
++    ("Smart Spacing", "고급 간격"),
++    ("Snap to Zone", "물리기 영역"),
++    ("Properties", "속성"),
++    ("Layers", "레이어"),
++    ("Links", "링크"),
++    ("Swatches", "견본"),
++    ("Color", "색상"),
++    ("Stroke", "획"),
++    ("Gradient", "그레이디언트"),
++    ("Align", "정렬"),
++    ("Pathfinder", "패스파인더"),
++    ("Info", "정보"),
++    ("Library", "라이브러리"),
++    ("Book", "책"),
++    ("Index", "색인"),
++    ("Hyperlinks", "하이퍼링크"),
++    ("Bookmarks", "책갈피"),
++    ("Articles", "아티클"),
++    ("Tags", "태그"),
++    ("Media", "미디어"),
++    ("Object States", "개체 상태"),
++    ("Buttons and Forms", "버튼 및 양식"),
++    ("Liquid Layout", "유동 레이아웃"),
++    ("Workspace", "작업 영역"),
++    ("Split Window", "창 분할"),
++    ("New Window", "새 창"),
++    ("Show All Menu Items", "모든 메뉴 항목 표시"),
++    ("Accept All", "모두 수락"),
++    ("Add", "추가"),
++    ("Add Document…", "문서 추가…"),
++    ("Add to Previous Spread", "이전 펼침면에 추가"),
++    ("Align From:", "정렬 기준:"),
++    ("Align to baseline grid", "기준선 격자에 정렬"),
++    ("Alignment:", "정렬:"),
++    ("All Spots to Process", "모든 별색을 원색으로"),
++    ("Allow Spread to Shuffle", "펼침면 재배치 허용"),
++    ("Alternating Row Fills", "행 칠 교대"),
++    ("Appearance", "모양"),
++    ("Apply Gradient", "그레이디언트 적용"),
++    ("Apply Parent", "상위 페이지 적용"),
++    ("Apply Style:", "스타일 적용:"),
++    ("Apply to All Spreads", "모든 펼침면에 적용"),
++    ("Apply to Stroke", "획에 적용"),
++    ("Art", "아트"),
++    ("Based On:", "기준:"),
++    ("Bleed", "재단 여백"),
++    ("Body Rows", "본문 행"),
++    ("Bottom", "아래쪽"),
++    ("Break Link to Style", "스타일에 대한 링크 끊기"),
++    ("Bullets and Numbering", "글머리 기호 및 번호 매기기"),
++    ("Business Card", "명함"),
++    ("CMYK", "CMYK"),
++    ("Cancel", "취소"),
++    ("Center Content", "내용 가운데 정렬"),
++    ("Change All", "모두 바꾸기"),
++    ("Change to:", "바꿀 내용:"),
++    ("Character Style:", "문자 스타일:"),
++    ("Checked by default", "기본적으로 선택됨"),
++    ("Choices", "선택 항목"),
++    ("Choose Image…", "이미지 선택…"),
++    ("Class:", "클래스:"),
++    ("Color Picker", "색상 피커"),
++    ("Color Settings", "색상 설정"),
++    ("Color:", "색상:"),
++    ("Columns", "단"),
++    ("Composer:", "컴포저:"),
++    ("Copies:", "매수:"),
++    ("Count", "개수 세기"),
++    ("Create", "만들기"),
++    ("Create Table", "표 만들기"),
++    ("Create Table…", "표 만들기…"),
++    ("Crop", "자르기"),
++    ("Crop to:", "자르기 기준:"),
++    ("Cursor Key:", "커서 키:"),
++    ("Default", "기본값"),
++    ("Default View:", "기본 보기:"),
++    ("Delete Column", "열 삭제"),
++    ("Delete Condition", "조건 삭제"),
++    ("Delete Layer", "레이어 삭제"),
++    ("Delete Page", "페이지 삭제"),
++    ("Delete Row", "행 삭제"),
++    ("Delete Swatch", "견본 삭제"),
++    ("Delete Unused Layers", "사용하지 않는 레이어 삭제"),
++    ("Desired", "최적"),
++    ("Dialog", "대화 상자"),
++    ("Document", "문서"),
++    ("Document Setup", "문서 설정"),
++    ("Drop Shadow", "그림자"),
++    ("Duplicate Spread", "펼침면 복제"),
++    ("Email", "이메일"),
++    ("Embed", "포함"),
++    ("Export XML…", "XML 내보내기…"),
++    ("Fast", "빠르게"),
++    ("Fill Frame Proportionally", "프레임을 비율에 맞게 채우기"),
++    ("Find All", "모두 찾기"),
++    ("Find Next", "다음 찾기"),
++    ("Find what:", "찾을 내용:"),
++    ("Find/Change", "찾기/바꾸기"),
++    ("Find/Replace Font", "글꼴 찾기/바꾸기"),
++    ("Fit Content Proportionally", "내용을 비율에 맞게 맞추기"),
++    ("Fit Content to Frame", "내용을 프레임에 맞추기"),
++    ("Fitting:", "맞춤:"),
++    ("Font Family:", "글꼴 패밀리:"),
++    ("Font Size:", "글꼴 크기:"),
++    ("Font Style:", "글꼴 스타일:"),
++    ("Footer Rows", "바닥글 행"),
++    ("Footnote Options", "각주 옵션"),
++    ("Form Field", "양식 필드"),
++    ("Format:", "형식:"),
++    ("Frame Fitting", "프레임 맞춤"),
++    ("Frame Fitting Options", "프레임 맞춤 옵션"),
++    ("Generate QR Code", "QR 코드 생성"),
++    ("Go To", "이동"),
++    ("Go to Page", "페이지로 이동"),
++    ("Gutter", "단 간격"),
++    ("Header Rows", "머리글 행"),
++    ("Height", "높이"),
++    ("Height:", "높이:"),
++    ("High Quality", "고품질"),
++    ("Horizontal Gridline Every:", "가로 격자선 간격:"),
++    ("Horizontal Margins:", "가로 여백:"),
++    ("Hyphenate", "하이픈 넣기"),
++    ("Import Options", "가져오기 옵션"),
++    ("Import XML…", "XML 가져오기…"),
++    ("Increment Every:", "증분 간격:"),
++    ("Ink Manager", "잉크 관리자"),
++    ("Insert Column", "열 삽입"),
++    ("Insert Page After", "뒤에 페이지 삽입"),
++    ("Insert Row", "행 삽입"),
++    ("Inset spacing", "안쪽 여백"),
++    ("Inside", "안쪽"),
++    ("Intent:", "용도:"),
++    ("Keyboard Shortcuts", "키보드 단축키"),
++    ("Kind:", "종류:"),
++    ("Lab", "Lab"),
++    ("Leading:", "행간:"),
++    ("Left Indent:", "왼쪽 들여쓰기:"),
++    ("Link To:", "링크 대상:"),
++    ("Load Profile…", "프로필 불러오기…"),
++    ("Load Swatches…", "견본 불러오기…"),
++    ("Load…", "불러오기…"),
++    ("Make Compound", "컴파운드 패스 만들기"),
++    ("Margins", "여백"),
++    ("Maximum", "최대"),
++    ("Menu Customization", "메뉴 사용자 정의"),
++    ("Merge into Active Layer", "현재 레이어로 병합"),
++    ("Min:", "최소:"),
++    ("Minimum", "최소"),
++    ("Minimum Space Before First Footnote:", "첫 번째 각주 앞 최소 간격:"),
++    ("Misspelled word → Correction (one per line):", "틀린 단어 → 수정(한 줄에 하나):"),
++    ("Mobile", "모바일"),
++    ("Move Selection Here", "선택 항목을 여기로 이동"),
++    ("Move to Color Group", "색상 그룹으로 이동"),
++    ("Move to Group", "그룹으로 이동"),
++    ("Multiline", "여러 줄"),
++    ("Name", "이름"),
++    ("Name:", "이름:"),
++    ("New Bookmark for This Page", "이 페이지에 새 책갈피"),
++    ("New Book…", "새 책…"),
++    ("New Color Group", "새 색상 그룹"),
++    ("New Color Group with Swatch", "견본으로 새 색상 그룹"),
++    ("New Cross-Reference", "새 상호 참조"),
++    ("New Document", "새 문서"),
++    ("New GREP Style", "새 GREP 스타일"),
++    ("New Library…", "새 라이브러리…"),
++    ("New Line Style", "새 선 스타일"),
++    ("New Nested Style", "새 중첩 스타일"),
++    ("New Workspace", "새 작업 영역"),
++    ("No spot inks", "별색 잉크 없음"),
++    ("None", "없음"),
++    ("Number of Pages:", "페이지 수:"),
++    ("Number of Sides:", "변의 수:"),
++    ("Number of columns", "단 수"),
++    ("Object Layer Options", "개체 레이어 옵션"),
++    ("Offset:", "오프셋:"),
++    ("On Release", "놓을 때"),
++    ("On Screen:", "화면 표시:"),
++    ("OpenType", "OpenType"),
++    ("Orientation:", "방향:"),
++    ("Outside", "바깥쪽"),
++    ("Pages:", "페이지:"),
++    ("Paragraph Composer", "단락 컴포저"),
++    ("Paragraph Style Options", "단락 스타일 옵션"),
++    ("Paragraph Style:", "단락 스타일:"),
++    ("Place PDF", "PDF 가져오기"),
++    ("Plain Text", "일반 텍스트"),
++    ("Polygon Settings", "다각형 설정"),
++    ("Position", "위치"),
++    ("Position:", "위치:"),
++    ("Poster", "포스터"),
++    ("Preferences", "환경 설정"),
++    ("Prefix:", "접두사:"),
++    ("Preset", "사전 설정"),
++    ("Print", "인쇄"),
++    ("Printer:", "프린터:"),
++    ("Printing / Exporting:", "인쇄/내보내기:"),
++    ("Quick Actions", "빠른 작업"),
++    ("RGB", "RGB"),
++    ("Rectangle", "사각형"),
++    ("Reject All", "모두 거부"),
++    ("Relative To:", "기준:"),
++    ("Release", "해제"),
++    ("Relink to Folder…", "폴더에 다시 링크…"),
++    ("Relink…", "다시 링크…"),
++    ("Remove Conditions from Selection", "선택 영역에서 조건 제거"),
++    ("Repeat Header Rows", "머리글 행 반복"),
++    ("Required", "필수"),
++    ("Reset All to Defaults", "모두 기본값으로 재설정"),
++    ("Restart Numbering Every:", "번호 다시 매기기 간격:"),
++    ("Reverse", "반전"),
++    ("Save Swatches for Exchange…", "교환용 견본 저장…"),
++    ("Save recovery data every:", "복구 데이터 저장 간격:"),
++    ("Search:", "검색:"),
++    ("Select an object.", "개체를 선택하십시오."),
++    ("Select text or a text frame.", "텍스트 또는 텍스트 프레임을 선택하십시오."),
++    ("Separator:", "구분 기호:"),
++    ("Show Prefix/Suffix in:", "접두어/접미어 표시 위치:"),
++    ("Show Tag Markers", "태그 표시자 표시"),
++    ("Single-line", "단일 행"),
++    ("Single-line Composer", "단일 행 컴포저"),
++    ("Size:", "크기:"),
++    ("Space Between Footnotes:", "각주 간격:"),
++    ("Speed", "속도"),
++    ("Star Inset:", "별 모양 인세트:"),
++    ("Start Page #:", "시작 페이지 번호:"),
++    ("Start at:", "시작 번호:"),
++    ("Start:", "시작:"),
++    ("Style Name:", "스타일 이름:"),
++    ("Style:", "스타일:"),
++    ("Stylistic Sets", "스타일 세트"),
++    ("Subdivisions:", "세분:"),
++    ("Suffix:", "접미어:"),
++    ("Synchronize", "동기화"),
++    ("Tag:", "태그:"),
++    ("Text Frame", "텍스트 프레임"),
++    ("Text Frame Options", "텍스트 프레임 옵션"),
++    ("Text Message", "문자 메시지"),
++    ("Text Style", "텍스트 스타일"),
++    ("Text Wrap", "텍스트 감싸기"),
++    ("This PDF has no layers.", "이 PDF에는 레이어가 없습니다."),
++    ("To Text:", "적용할 텍스트:"),
++    ("Top", "위쪽"),
++    ("Track Changes in All Stories", "모든 스토리에서 변경 내용 추적"),
++    ("Trim", "재단"),
++    ("Type:", "유형:"),
++    ("Typical", "보통"),
++    ("UI Size:", "UI 크기:"),
++    ("Ungroup Color Group", "색상 그룹 해제"),
++    ("Unmerge", "병합 해제"),
++    ("Update", "업데이트"),
++    ("Update Numbering", "번호 업데이트"),
++    ("Use Global Light", "전체 조명 사용"),
++    ("User Dictionary", "사용자 사전"),
++    ("Vertical Gridline Every:", "세로 격자선 간격:"),
++    ("Vertical Margins:", "세로 여백:"),
++    ("Vertical justification", "세로 균등 배치"),
++    ("View Threshold:", "보기 한계값:"),
++    ("Web", "웹"),
++    ("Web Hyperlink", "웹 하이퍼링크"),
++    ("Weight:", "두께:"),
++    ("Width", "폭"),
++    ("Width:", "폭:"),
++    ("Words, one per line:", "단어(한 줄에 하나씩):"),
++    ("Multiple Objects", "여러 개체"),
++    ("Ellipse", "타원"),
++    ("Polygon", "다각형"),
++    ("Characters", "문자"),
++    ("Image", "이미지"),
++    ("Line", "선"),
++    ("Path", "패스"),
++    ("No Selection", "선택 안 함"),
++    ("Adjust Layout", "레이아웃 조정"),
++    ("Edit Page", "페이지 편집"),
++    ("Import File", "파일 가져오기"),
++    ("Insert Page", "페이지 삽입"),
++    ("Hide Bar", "막대 숨기기"),
++    ("Properties Panel", "속성 패널"),
++    ("New Workspace…", "새 작업 영역…"),
++    ("Float panel", "패널 띄우기"),
++    ("Dock panel", "패널 고정"),
++    ("Fit frame height to text", "프레임 높이를 텍스트에 맞추기"),
++    ("More Options", "추가 옵션"),
++    ("Flip Horizontal", "가로로 뒤집기"),
++    ("Rotate 90° Clockwise", "시계 방향으로 90° 회전"),
++    ("Flip Vertical", "세로로 뒤집기"),
++    ("Default Fill and Stroke (D)", "기본 칠 및 획 (D)"),
++    ("Swap Fill and Stroke (Shift+X)", "칠과 획 교체 (Shift+X)"),
++    ("Fill (X)", "칠 (X)"),
++    ("Stroke (X)", "획 (X)"),
++    ("Apply None (/)", "없음 적용 (/)"),
++    ("Reverse the gradient", "그레이디언트 반전"),
++    ("Style source", "스타일 소스"),
++    ("Open", "열기"),
++    ("All Caps", "모두 대문자"),
++    ("Underline", "밑줄"),
++    ("Strikethrough", "취소선"),
++    ("Superscript", "위 첨자"),
++    ("Pick a file in the folder holding the moved graphics", "이동한 그래픽이 있는 폴더의 파일 선택"),
++    ("Show Favorites Only", "즐겨찾기만 표시"),
++    ("Select", "선택"),
++    ("Hyperlink from the selected text or frames", "선택한 텍스트 또는 프레임에서 하이퍼링크 만들기"),
++    ("Include when exporting", "내보낼 때 포함"),
++    ("Add the selection", "선택 영역 추가"),
++    ("Tag the selection", "선택 영역에 태그 지정"),
++    ("Separated by commas", "쉼표로 구분"),
++    ("Show in the text", "텍스트에 표시"),
++    ("Show / hide text with this condition", "이 조건의 텍스트 표시/숨기기"),
++    ("Spreads of up to 10 pages", "최대 10페이지 펼침면"),
++    ("for", "적용 범위"),
++    ("About DesignCraft", "DesignCraft 정보"),
++    ("Accept All Changes", "모든 변경 내용 적용"),
++    ("Activate Document", "문서 활성화"),
++    ("Add Anchor Point", "고정점 추가"),
++    ("Add Document", "문서 추가"),
++    ("Add Hyphenation Exception", "하이픈 넣기 예외 추가"),
++    ("Add Item", "항목 추가"),
++    ("Add Page to Spread", "펼침면에 페이지 추가"),
++    ("Add to Swatches", "견본에 추가"),
++    ("Allow Selected Spread to Shuffle", "선택한 펼침면 재배치 허용"),
++    ("Anchored Object Options…", "고정된 개체 옵션…"),
++    ("Anchored Objects", "고정된 개체"),
++    ("Appearance of Black", "검정 표시 방법"),
++    ("Apply Attributes (Eyedropper)", "속성 적용(스포이드)"),
++    ("Apply Cell Style", "셀 스타일 적용"),
++    ("Apply Color", "색상 적용"),
++    ("Apply Condition", "조건 적용"),
++    ("Apply Parent to Pages…", "페이지에 상위 페이지 적용…"),
++    ("ArtCraft App Page…", "ArtCraft 앱 페이지…"),
++    ("ArtCraft Website…", "ArtCraft 웹 사이트…"),
++    ("Attributes", "속성"),
++    ("Bevel and Emboss", "경사와 엠보스"),
++    ("Buttons", "버튼"),
++    ("Cell Options", "셀 옵션"),
++    ("Cell Style Options…", "셀 스타일 옵션…"),
++    ("Change All (Object)", "모두 변경(개체)"),
++    ("Change Case", "대/소문자 변경"),
++    ("Changes", "변경 내용"),
++    ("Character Formatting", "문자 서식"),
++    ("Clear Conveyor", "컨베이어 지우기"),
++    ("Clear Transformations", "변형 지우기"),
++    ("Clipping Path…", "클리핑 패스…"),
++    ("Close Book", "책 닫기"),
++    ("Close Library", "라이브러리 닫기"),
++    ("Collect", "수집"),
++    ("Color Settings…", "색상 설정…"),
++    ("Community & Project Links", "커뮤니티 및 프로젝트 링크"),
++    ("Conditions", "조건"),
++    ("Container", "컨테이너"),
++    ("Content", "내용"),
++    ("Contextual Task Bar", "상황별 작업 표시줄"),
++    ("Control", "컨트롤"),
++    ("Convert Cell to Graphic Cell", "셀을 그래픽 셀로 변환"),
++    ("Convert Cell to Graphic Cell…", "셀을 그래픽 셀로 변환…"),
++    ("Convert Cell to Text Cell", "셀을 텍스트 셀로 변환"),
++    ("Convert Color", "색상 변환"),
++    ("Convert Direction Point", "방향점 변환"),
++    ("Convert Note to Text", "메모를 텍스트로 변환"),
++    ("Convert Selection to Multi-State Object", "선택 영역을 다중 상태 개체로 변환"),
++    ("Convert Shape", "모양 변환"),
++    ("Convert Table to Text", "표를 텍스트로 변환"),
++    ("Convert Text to Table", "텍스트를 표로 변환"),
++    ("Convert to Button", "버튼으로 변환"),
++    ("Convert to Form Field", "양식 필드로 변환"),
++    ("Conveyor", "컨베이어"),
++    ("Copy Link(s) To…", "링크 복사 위치…"),
++    ("Corner Options…", "모퉁이 옵션…"),
++    ("Create Alternate Layout…", "대체 레이아웃 만들기…"),
++    ("Create Frame", "프레임 만들기"),
++    ("Create Merged Document…", "병합 문서 만들기…"),
++    ("Cross-Reference Formats", "상호 참조 형식"),
++    ("Cross-References", "상호 참조"),
++    ("Data Merge Fields", "데이터 병합 필드"),
++    ("Define Cross-Reference Format…", "상호 참조 형식 정의…"),
++    ("Define Lists…", "목록 정의…"),
++    ("Define Text Variable…", "텍스트 변수 정의…"),
++    ("Delete All Guides on Spread", "펼침면의 모든 안내선 삭제"),
++    ("Delete Anchor Point", "고정점 삭제"),
++    ("Delete Item", "항목 삭제"),
++    ("Delete Text Variable", "텍스트 변수 삭제"),
++    ("Delete Workspace…", "작업 영역 삭제…"),
++    ("DesignCraft Website…", "DesignCraft 웹 사이트…"),
++    ("DesignCraft on GitHub…", "GitHub의 DesignCraft…"),
++    ("Detach All Objects from Parent", "상위 페이지에서 모든 개체 분리"),
++    ("Directional Feather", "방향 페더"),
++    ("Distribute", "분포"),
++    ("Dock Panel", "패널 고정"),
++    ("Document Endnote Options…", "문서 미주 옵션…"),
++    ("Document Footnote Options…", "문서 각주 옵션…"),
++    ("Document Preferences", "문서 환경 설정"),
++    ("Document Presets", "문서 사전 설정"),
++    ("Document…", "문서…"),
++    ("Dynamic Spelling", "동적 맞춤법"),
++    ("Edit Parents", "상위 페이지 편집"),
++    ("Edit Story", "스토리 편집"),
++    ("Edit in Story Editor", "스토리 편집기에서 편집"),
++    ("Endnotes", "미주"),
++    ("Entire Pasteboard", "대지 전체"),
++    ("Erase", "지우기"),
++    ("Export Book to PDF…", "책을 PDF로 내보내기…"),
++    ("Export EPUB (Fixed Layout)…", "EPUB 내보내기(고정 레이아웃)…"),
++    ("Export EPUB (Reflowable)…", "EPUB 내보내기(리플로우)…"),
++    ("Export EPUB…", "EPUB 내보내기…"),
++    ("Export HTML…", "HTML 내보내기…"),
++    ("Export IDML…", "IDML 내보내기…"),
++    ("Export PDF (Interactive)…", "PDF 내보내기(대화형)…"),
++    ("Export Page as PNG…", "페이지를 PNG로 내보내기…"),
++    ("Export Selection as Snippet", "선택 영역을 스니펫으로 내보내기"),
++    ("Export Tagging", "태그 지정 내보내기"),
++    ("Export Text…", "텍스트 내보내기…"),
++    ("Extend Text Selection", "텍스트 선택 영역 확장"),
++    ("Fast Display", "빠른 표시"),
++    ("Find", "찾기"),
++    ("Find Object", "개체 찾기"),
++    ("Find by Script Label", "스크립트 레이블로 찾기"),
++    ("Find/Replace Font…", "글꼴 찾기/바꾸기…"),
++    ("First Object Above", "위의 첫 번째 개체"),
++    ("Fit Selection in Window", "창에 선택 영역 맞추기"),
++    ("Flattener Preview", "병합 미리 보기"),
++    ("Float Panel", "패널 띄우기"),
++    ("Fonts in Document", "문서의 글꼴"),
++    ("Footnotes", "각주"),
++    ("Form Fields", "양식 필드"),
++    ("Frame Fitting Options…", "프레임 맞춤 옵션…"),
++    ("Generate Index…", "색인 생성…"),
++    ("Generate QR Code…", "QR 코드 생성…"),
++    ("Generate Static Caption", "정적 캡션 생성"),
++    ("Get Story", "스토리 가져오기"),
++    ("Get Table", "표 가져오기"),
++    ("Global Light…", "전체 조명…"),
++    ("Go To Link", "링크로 이동"),
++    ("Go To Source", "소스로 이동"),
++    ("Go to Footnote Reference", "각주 참조로 이동"),
++    ("Go to Page…", "페이지로 이동…"),
++    ("Gradient Feather", "그레이디언트 페더"),
++    ("Gridify", "격자화"),
++    ("Group Transparency", "그룹 투명도"),
++    ("Guides", "안내선"),
++    ("Hide Menu Item", "메뉴 항목 숨기기"),
++    ("Hide/Lock Others", "기타 숨기기/잠그기"),
++    ("High Quality Display", "고품질 표시"),
++    ("History", "작업 내역"),
++    ("Hyphenation Exceptions", "하이픈 넣기 예외"),
++    ("Import Options: Styles", "가져오기 옵션: 스타일"),
++    ("Index Page References", "색인 페이지 참조"),
++    ("Inner Glow", "내부 광선"),
++    ("Inner Shadow", "내부 그림자"),
++    ("Insert Anchored Object…", "고정된 개체 삽입…"),
++    ("Insert Cross-Reference…", "상호 참조 삽입…"),
++    ("Insert Endnote", "미주 삽입"),
++    ("Insert Footnote", "각주 삽입"),
++    ("Insert Math Expression…", "수식 삽입…"),
++    ("Insert Pages…", "페이지 삽입…"),
++    ("Insert Variable", "변수 삽입"),
++    ("Inspect Document", "문서 검사"),
++    ("Interface Color Theme", "인터페이스 색상 테마"),
++    ("Join the ArtCraft Discord…", "ArtCraft Discord 참여…"),
++    ("Last Object Below", "아래의 마지막 개체"),
++    ("Library Contents", "라이브러리 내용"),
++    ("Library Items", "라이브러리 항목"),
++    ("Linked Stories", "연결된 스토리"),
++    ("Liquid Page Rule", "유동 페이지 규칙"),
++    ("List Documents", "문서 목록"),
++    ("List Styles", "목록 스타일"),
++    ("List Tools", "도구 목록"),
++    ("Load Place Cursor", "배치 커서에 불러오기"),
++    ("Make Compound Path", "컴파운드 패스 만들기"),
++    ("Map Styles to Tags", "스타일을 태그에 매핑"),
++    ("Math Expression SVG", "수식 SVG"),
++    ("Media Options", "미디어 옵션"),
++    ("Menus…", "메뉴…"),
++    ("Merge Layers", "레이어 병합"),
++    ("Move Caret", "캐럿 이동"),
++    ("Move Gap", "간격 이동"),
++    ("Move Row", "행 이동"),
++    ("New Book", "새 책"),
++    ("New Cell Style…", "새 셀 스타일…"),
++    ("New Color Swatch…", "새 색상 견본…"),
++    ("New Condition…", "새 조건…"),
++    ("New Guide", "새 안내선"),
++    ("New Hyperlink Destination…", "새 하이퍼링크 대상…"),
++    ("New Hyperlink…", "새 하이퍼링크…"),
++    ("New Library", "새 라이브러리"),
++    ("New Page Reference…", "새 페이지 참조…"),
++    ("New Paragraph Style…", "새 단락 스타일…"),
++    ("New Stroke Style…", "새 획 스타일…"),
++    ("New Table Style…", "새 표 스타일…"),
++    ("Next Cell", "다음 셀"),
++    ("Next Document", "다음 문서"),
++    ("Next Object Above", "위의 다음 개체"),
++    ("Next Object Below", "아래의 다음 개체"),
++    ("Next Object in Group", "그룹 내 다음 개체"),
++    ("Notes", "메모"),
++    ("Object Export Options", "개체 내보내기 옵션"),
++    ("Object Export Options…", "개체 내보내기 옵션…"),
++    ("Object Layer Options…", "개체 레이어 옵션…"),
++    ("Object Layers", "개체 레이어"),
++    ("Object Liquid Settings", "개체 유동 설정"),
++    ("Open Book", "책 열기"),
++    ("Open Bytes", "바이트 열기"),
++    ("Open IDML", "IDML 열기"),
++    ("Open Library", "라이브러리 열기"),
++    ("Outer Glow", "외부 광선"),
++    ("Overprint Preview", "중복 인쇄 미리 보기"),
++    ("Override All Parent Page Items", "모든 상위 페이지 항목 재정의"),
++    ("Page Size", "페이지 크기"),
++    ("Page Transition", "페이지 전환"),
++    ("Page Transitions", "페이지 전환"),
++    ("Paragraph Formatting", "단락 서식"),
++    ("Paragraph Style Options…", "단락 스타일 옵션…"),
++    ("Paste Into", "안쪽에 붙여넣기"),
++    ("Paste without Formatting", "서식 없이 붙여넣기"),
++    ("Place", "가져오기"),
++    ("Place Caret", "캐럿 배치"),
++    ("Place Item", "항목 가져오기"),
++    ("Place Snippet", "스니펫 가져오기"),
++    ("Place and Link", "가져오기 및 링크"),
++    ("Place with Import Options…", "가져오기 옵션과 함께 가져오기…"),
++    ("Polygon Settings…", "다각형 설정…"),
++    ("Preflight Document", "문서 프리플라이트"),
++    ("Previous Cell", "이전 셀"),
++    ("Previous Document", "이전 문서"),
++    ("Previous Object in Group", "그룹 내 이전 개체"),
++    ("Primary Text Frame", "기본 텍스트 프레임"),
++    ("Print Booklet…", "소책자 인쇄…"),
++    ("Printers", "프린터"),
++    ("Proof Colors", "색상 교정"),
++    ("Proof Setup", "교정 설정"),
++    ("Quick Apply…", "빠른 적용…"),
++    ("Recover Documents", "문서 복구"),
++    ("Recovery Data", "복구 데이터"),
++    ("Reject All Changes", "모든 변경 내용 거부"),
++    ("Release Compound Path", "컴파운드 패스 풀기"),
++    ("Remove All Local Overrides", "모든 로컬 재정의 제거"),
++    ("Remove Document", "문서 제거"),
++    ("Report an Issue…", "문제 보고…"),
++    ("Reset Shortcuts", "단축키 재설정"),
++    ("Reset Workspace", "작업 영역 재설정"),
++    ("Resize", "크기 조정"),
++    ("Rotate Spread", "펼침면 회전"),
++    ("Run Script", "스크립트 실행"),
++    ("Sample Document", "샘플 문서"),
++    ("Satin", "새틴"),
++    ("Save Recovery Data", "복구 데이터 저장"),
++    ("Script Label", "스크립트 레이블"),
++    ("Select All on Layer", "레이어의 모두 선택"),
++    ("Select Cells", "셀 선택"),
++    ("Select Column", "열 선택"),
++    ("Select Frame", "프레임 선택"),
++    ("Select Row", "행 선택"),
++    ("Select Table", "표 선택"),
++    ("Select Text", "텍스트 선택"),
++    ("Select Tool", "도구 선택"),
++    ("Select Word", "단어 선택"),
++    ("Selection Attributes", "선택 영역 속성"),
++    ("Separations Preview", "분판 미리 보기"),
++    ("Serialize", "직렬화"),
++    ("Set Active Layer", "활성 레이어 설정"),
++    ("Set Shortcut", "단축키 설정"),
++    ("Set Visibility / Lock", "표시/잠금 설정"),
++    ("Show Panel", "패널 표시"),
++    ("Show/Hide Baseline Grid", "기준선 격자 표시/숨기기"),
++    ("Show/Hide Frame Edges", "프레임 가장자리 표시/숨기기"),
++    ("Show/Hide Guides", "안내선 표시/숨기기"),
++    ("Show/Hide Hidden Characters", "숨은 문자 표시/숨기기"),
++    ("Show/Hide Panels", "패널 표시/숨기기"),
++    ("Show/Hide Panels Except Tools", "도구 외 패널 표시/숨기기"),
++    ("Show/Hide Rulers", "눈금자 표시/숨기기"),
++    ("Show/Hide Tagged Frames", "태그가 지정된 프레임 표시/숨기기"),
++    ("Show/Hide Text Threads", "텍스트 스레드 표시/숨기기"),
++    ("Smooth", "매끄럽게"),
++    ("Sort", "정렬"),
++    ("Split Cell Horizontally", "셀 가로로 분할"),
++    ("Split Cell Vertically", "셀 세로로 분할"),
++    ("Split Path", "패스 분할"),
++    ("Step and Repeat…", "단계 및 반복…"),
++    ("Stroke Styles", "획 스타일"),
++    ("Structure", "구조"),
++    ("Style Source", "스타일 소스"),
++    ("Synchronize Book", "책 동기화"),
++    ("Table Options", "표 옵션"),
++    ("Table Panel", "표 패널"),
++    ("Table Style Options…", "표 스타일 옵션…"),
++    ("Table of Contents Entries", "목차 항목"),
++    ("Table of Contents…", "목차…"),
++    ("Text Anchors", "텍스트 앵커"),
++    ("Text Variables", "텍스트 변수"),
++    ("Toggle Normal/Preview", "표준/미리 보기 전환"),
++    ("Toggle Selection", "선택 전환"),
++    ("Tools: Double Column", "도구: 2열"),
++    ("Transform Again", "변형 반복"),
++    ("Transform Panel", "변형 패널"),
++    ("Transform Values", "변형 값"),
++    ("Transparency Blend Space", "투명도 혼합 공간"),
++    ("Transparency Flattener Presets", "투명도 병합 사전 설정"),
++    ("Type on a Path", "패스 상의 문자"),
++    ("Type on a Path Options…", "패스 상의 문자 옵션…"),
++    ("Typical Display", "일반 표시"),
++    ("UI Scaling", "UI 배율"),
++    ("Update Link", "링크 업데이트"),
++    ("User Dictionary Words", "사용자 사전 단어"),
++    ("User Dictionary…", "사용자 사전…"),
++    ("Zoom To", "확대/축소"),
++    ("⇧", "⇧"),
++    ("⌃", "⌃"),
++    ("⌘", "⌘"),
++    ("⌥", "⌥"),
++    ("Accept Change", "변경 내용 수락"),
++    ("Add Anchor", "앵커 추가"),
++    ("Add Selection to Article", "선택 영역을 아티클에 추가"),
++    ("Add Unnamed Colors", "이름 없는 색상 추가"),
++    ("Add to Dictionary", "사전에 추가"),
++    ("Align Center", "가운데 정렬"),
++    ("Align Left", "왼쪽 정렬"),
++    ("Align Right", "오른쪽 정렬"),
++    ("Apply Character Style", "문자 스타일 적용"),
++    ("Apply Object Style", "개체 스타일 적용"),
++    ("Apply Paragraph Style", "단락 스타일 적용"),
++    ("Apply Table Style", "표 스타일 적용"),
++    ("Article Options", "아티클 옵션"),
++    ("Basic Feather", "기본 페더"),
++    ("Bold", "굵게"),
++    ("Bring Forward", "앞으로 가져오기"),
++    ("Bring to Front", "맨 앞으로 가져오기"),
++    ("Change", "변경"),
++    ("Character Style Options…", "문자 스타일 옵션…"),
++    ("Close Path", "패스 닫기"),
++    ("Color Group Options", "색상 그룹 옵션"),
++    ("Column Width", "열 너비"),
++    ("Condition Options…", "조건 옵션…"),
++    ("Convert to Liquid Guide", "유동 안내선으로 변환"),
++    ("Convert to Object", "개체로 변환"),
++    ("Create Line", "선 만들기"),
++    ("Create Path", "패스 만들기"),
++    ("Decrease Point Size", "글꼴 크기 줄이기"),
++    ("Delete Article", "아티클 삭제"),
++    ("Delete Bookmark", "책갈피 삭제"),
++    ("Delete Endnote", "미주 삭제"),
++    ("Delete Footnote", "각주 삭제"),
++    ("Delete Guide", "안내선 삭제"),
++    ("Delete Hyperlink", "하이퍼링크 삭제"),
++    ("Delete List", "목록 삭제"),
++    ("Delete Note", "메모 삭제"),
++    ("Delete Pages", "페이지 삭제"),
++    ("Delete Paragraph Style", "단락 스타일 삭제"),
++    ("Delete Stroke Style", "획 스타일 삭제"),
++    ("Delete Table", "표 삭제"),
++    ("Delete Tag", "태그 삭제"),
++    ("Delete Text", "텍스트 삭제"),
++    ("Distribute Columns Evenly", "열 균등 분포"),
++    ("Edit Endnote", "미주 편집"),
++    ("Edit Note", "메모 편집"),
++    ("Embed Link", "링크 포함"),
++    ("Fill", "칠"),
++    ("Fill with Placeholder Text", "자리 표시자 텍스트로 채우기"),
++    ("Flip", "뒤집기"),
++    ("Hyperlink Options…", "하이퍼링크 옵션…"),
++    ("Increase Point Size", "글꼴 크기 늘리기"),
++    ("Insert Column Left", "왼쪽에 열 삽입"),
++    ("Insert Column Right", "오른쪽에 열 삽입"),
++    ("Insert Row Above", "위에 행 삽입"),
++    ("Insert Row Below", "아래에 행 삽입"),
++    ("Italic", "기울임꼴"),
++    ("Justify Left", "균등 배치(마지막 줄 왼쪽)"),
++    ("Layer Options…", "레이어 옵션…"),
++    ("Move", "이동"),
++    ("Move Anchors", "앵커 이동"),
++    ("Move Column", "열 이동"),
++    ("Move Guide", "안내선 이동"),
++    ("Move Layer", "레이어 이동"),
++    ("Move Pages…", "페이지 이동…"),
++    ("Move to Layer", "레이어로 이동"),
++    ("New Article", "새 아티클"),
++    ("New Bookmark", "새 책갈피"),
++    ("New Character Style…", "새 문자 스타일…"),
++    ("New Layer…", "새 레이어…"),
++    ("New Note", "새 메모"),
++    ("New Object Style…", "새 개체 스타일…"),
++    ("New Parent…", "새 상위 페이지…"),
++    ("New Tag", "새 태그"),
++    ("Opacity", "불투명도"),
++    ("Paste in Place", "제자리에 붙여넣기"),
++    ("Place Loaded Graphic", "불러온 그래픽 가져오기"),
++    ("Reject Change", "변경 내용 거부"),
++    ("Release State to Objects", "상태를 개체로 풀기"),
++    ("Remove Hyphenation Exception", "하이픈 넣기 예외 제거"),
++    ("Remove from Article", "아티클에서 제거"),
++    ("Rename", "이름 변경"),
++    ("Rename Bookmark", "책갈피 이름 변경"),
++    ("Rotate", "회전"),
++    ("Row Height", "행 높이"),
++    ("Scale", "크기 조절"),
++    ("Send Backward", "뒤로 보내기"),
++    ("Send to Back", "맨 뒤로 보내기"),
++    ("Set Cross-Reference Format", "상호 참조 형식 설정"),
++    ("Set Footnote Text", "각주 텍스트 설정"),
++    ("Set Story Text", "스토리 텍스트 설정"),
++    ("Shear", "기울이기"),
++    ("Show All on Spread", "펼침면의 모두 표시"),
++    ("Show State", "상태 표시"),
++    ("State Options", "상태 옵션"),
++    ("Tag Frame", "프레임 태그 지정"),
++    ("Tag Text", "텍스트 태그 지정"),
++    ("Track Changes", "변경 내용 추적"),
++    ("Unlink", "링크 해제"),
++    ("Unlock All on Spread", "펼침면의 모두 잠금 해제"),
++    ("Update Index", "색인 업데이트"),
++    ("Update Table of Contents", "목차 업데이트"),
++    ("Bulleted and Numbered Lists", "글머리 기호 및 번호 매기기"),
++    ("Insert Special Character", "특수 문자 삽입"),
++    ("Insert White Space", "공백 삽입"),
++    ("Insert Break Character", "나누기 문자 삽입"),
++    ("Hyperlinks Cross-References", "하이퍼링크 상호 참조"),
++    ("Document Footnote Options...", "문서 각주 옵션..."),
++    ("  Close  ", "  닫기  "),
++    ("  New file  ", "  새 파일  "),
++    ("  OK  ", "  확인  "),
++    ("  Open  ", "  열기  "),
++    ("  Open sample magazine  ", "  샘플 잡지 열기  "),
++    ("(Top Level)", "(최상위)"),
++    ("(import)", "(가져오기)"),
++    ("Anchored Object", "고정된 개체"),
++    ("Baseline Grid", "기준선 격자"),
++    ("Bleed and Slug", "재단 여백 및 슬러그"),
++    ("Buttons act in interactive PDF export.", "버튼은 대화형 PDF 내보내기에서 작동합니다."),
++    ("Captions", "캡션"),
++    ("Character Settings", "문자 설정"),
++    ("Choose a link.", "링크를 선택하십시오."),
++    ("Clipping Path", "클리핑 패스"),
++    ("Content Fitting", "내용 맞춤"),
++    ("Convert Cell Type", "셀 유형 변환"),
++    ("Create Alternate Layout", "대체 레이아웃 만들기"),
++    ("Crop Amount", "재단 크기"),
++    ("Cross-Reference Format", "상호 참조 형식"),
++    ("Delete Workspace", "작업 영역 삭제"),
++    ("DesignCraft", "DesignCraft"),
++    ("Display Performance", "표시 성능"),
++    ("Document Grid", "문서 격자"),
++    ("Document Recovery Data", "문서 복구 데이터"),
++    ("EPUB and HTML", "EPUB 및 HTML"),
++    ("Export", "내보내기"),
++    ("Facing Pages", "페이지 마주 보기"),
++    ("GREP Styles", "GREP 스타일"),
++    ("Get help, share your layouts and shape what we build next.", "도움을 받고, 레이아웃을 공유하고, 다음에 만들 기능을 함께 정하십시오."),
++    ("Highlight", "강조 표시"),
++    ("Hyperlinks & Cross-References", "하이퍼링크 및 상호 참조"),
++    ("Hyphens and Dashes", "하이픈 및 대시"),
++    ("Interactive", "대화형"),
++    ("Invert", "반전"),
++    ("Join the ArtCraft community", "ArtCraft 커뮤니티 가입"),
++    ("Keyboard Increments", "키보드 증감"),
++    ("Liquid guides", "유동 안내선"),
++    ("Markers", "마커"),
++    ("More ArtCraft apps", "기타 ArtCraft 앱"),
++    ("Nested Line Styles", "중첩 행 스타일"),
++    ("Nested Styles", "중첩 스타일"),
++    ("No articles: exports follow page order.", "아티클 없음: 내보내기는 페이지 순서를 따릅니다."),
++    ("No book open.", "열린 책이 없습니다."),
++    ("No bookmarks. They become the PDF outline.", "책갈피가 없습니다. 책갈피는 PDF 개요가 됩니다."),
++    ("No changes.", "변경 내용이 없습니다."),
++    ("No document open", "열린 문서 없음"),
++    ("No document.", "문서가 없습니다."),
++    ("No library open.", "열린 라이브러리가 없습니다."),
++    ("No notes in this document.", "이 문서에는 메모가 없습니다."),
++    ("No placed graphics.", "가져온 그래픽이 없습니다."),
++    ("No scripts. Add one below.", "스크립트가 없습니다. 아래에서 추가하십시오."),
++    ("No text anchors in this document.", "이 문서에는 텍스트 앵커가 없습니다."),
++    ("OK changes all: text and paragraph/character styles.", "확인을 누르면 모두 변경됩니다: 텍스트와 단락/문자 스타일."),
++    ("OVERSET", "넘침"),
++    ("Open source. No telemetry.", "오픈 소스입니다. 원격 측정을 하지 않습니다."),
++    ("Options", "옵션"),
++    ("Options for Black on RGB and Grayscale Devices", "RGB 및 회색 음영 장치에서의 검정 옵션"),
++    ("Other", "기타"),
++    ("Output", "출력"),
++    ("Page Numbering", "페이지 번호 매기기"),
++    ("Page layout for print and screen — fast, open and scriptable.", "인쇄 및 화면용 페이지 레이아웃 — 빠르고, 개방적이며, 스크립트 가능."),
++    ("Page · PPI", "페이지 · PPI"),
++    ("Part of the ArtCraft suite of open creative tools.", "오픈 크리에이티브 도구 모음 ArtCraft의 일부입니다."),
++    ("Pasteboard Options", "대지 옵션"),
++    ("Paths", "패스"),
++    ("Place the insertion point in a table, or create one.", "표 안에 삽입점을 놓거나 표를 만드십시오."),
++    ("Plays in EPUB export; print and PDF show the poster.", "EPUB 내보내기에서 재생됩니다. 인쇄 및 PDF에서는 포스터가 표시됩니다."),
++    ("Quotation Marks", "따옴표"),
++    ("Recently Used", "최근 사용"),
++    ("Replace With", "바꿀 내용"),
++    ("Right-click: stroke, groups", "오른쪽 클릭: 획, 그룹"),
++    ("Ruler Units", "눈금자 단위"),
++    ("Saves which bars show and where the panels are.", "표시할 막대와 패널 위치를 저장합니다."),
++    ("Select an object to color its fill or stroke.", "개체를 선택하여 칠 또는 획에 색상을 지정하십시오."),
++    ("Select an object to give its fill a gradient.", "개체를 선택하여 칠에 그레이디언트를 적용하십시오."),
++    ("Select an object to make it a button.", "개체를 선택하여 버튼으로 만드십시오."),
++    ("Show", "표시"),
++    ("Smart Text Reflow", "고급 텍스트 리플로우"),
++    ("Spelling", "맞춤법"),
++    ("Start a new document", "새 문서 시작"),
++    ("Status", "상태"),
++    ("Style Mapping", "스타일 매핑"),
++    ("Style Name Conflicts", "스타일 이름 충돌"),
++    ("Symbols", "기호"),
++    ("System default", "시스템 기본값"),
++    ("Table Dimensions", "표 크기"),
++    ("Text Display Options", "텍스트 표시 옵션"),
++    ("The fill isn't a gradient.", "칠이 그레이디언트가 아닙니다."),
++    ("The library is empty. Select objects and Add Selection.", "라이브러리가 비어 있습니다. 개체를 선택하고 선택 영역 추가를 실행하십시오."),
++    ("Transitions play in interactive PDF (full-screen mode).", "전환 효과는 대화형 PDF(전체 화면 모드)에서 재생됩니다."),
++    ("Type & Tables", "문자 및 표"),
++    ("Type Options", "문자 옵션"),
++    ("User Dictionary (this document)", "사용자 사전(이 문서)"),
++    ("Utilities", "유틸리티"),
++    ("Variable Font", "가변 글꼴"),
++    ("Welcome to DesignCraft", "DesignCraft에 오신 것을 환영합니다"),
++    ("When Scaling", "크기 조정 시"),
++    ("[Basic] (working) ▾", "[기본](작업 중) ▾"),
++    ("[Black] Overprint", "[검정] 중복 인쇄"),
++    ("[No Group]", "[그룹 없음]"),
++    ("[None]", "[없음]"),
++    ("[None] — choose a colour on the ramp.", "[없음] — 색상 램프에서 색상을 선택하십시오."),
++    ("discord.gg/artcraft — help, feedback and show-and-tell", "discord.gg/artcraft — 도움말, 피드백 및 작품 공유"),
++    ("⌥-click clears overrides", "⌥-클릭하여 재정의 지우기"),
++    ("⚠ out of date", "⚠ 오래됨"),
++    ("General", "일반"),
++    ("Basic Character Formats", "기본 문자 서식"),
++    ("Indents and Spacing", "들여쓰기 및 간격"),
++    ("Hyphenation", "하이픈 넣기"),
++    ("Justification", "균등 배치"),
++    ("Drop Caps and Nested Styles", "드롭 캡 및 중첩 스타일"),
++    ("GREP Style", "GREP 스타일"),
++    ("Character Color", "문자 색상"),
++    ("Numbering and Formatting", "번호 매기기 및 서식"),
++    ("Spacing Options", "간격 옵션"),
++    ("First Baseline", "첫 번째 기준선"),
++    ("Rule Above", "위쪽 선"),
++    ("Numbering", "번호 매기기"),
++    ("Footnote Reference Number in Text", "본문 내 각주 참조 번호"),
++    ("Footnote Formatting", "각주 서식"),
++    ("Span Footnotes Across Columns", "여러 단에 걸쳐 각주 배치"),
++    ("Rule On", "선 사용"),
++    ("Ascent", "어센트"),
++    ("Cap Height", "대문자 높이"),
++    ("Leading", "행간"),
++    ("x Height", "x 높이"),
++    ("Fixed", "고정"),
++    ("Never (continuous)", "안 함(연속)"),
++    ("Page", "페이지"),
++    ("Spread", "펼침면"),
++    ("Section", "섹션"),
++    ("Footnote Reference", "각주 참조"),
++    ("Footnote Text", "각주 텍스트"),
++    ("Both", "둘 다"),
++    ("Apply Superscript", "위 첨자 적용"),
++    ("Apply Subscript", "아래 첨자 적용"),
++    ("Apply Normal", "표준 위치 적용"),
++    ("OpenType Superscript", "OpenType 위 첨자"),
++    ("through", "까지(포함)"),
++    ("up to", "까지(미포함)"),
++    ("line", "행"),
++    ("lines", "행"),
++    ("sentences", "문장"),
++    ("words", "단어"),
++    ("characters", "문자"),
++    ("letters", "글자"),
++    ("digits", "숫자"),
++    ("tab", "탭"),
++    ("forcedLineBreak", "강제 줄 바꿈"),
++    ("emSpace", "전각 공백"),
++    ("enSpace", "반각 공백"),
++    ("chars", "지정 문자"),
++    ("[Automatic]", "[자동]"),
++    ("Tracking:", "자간:"),
++    ("Right Indent:", "오른쪽 들여쓰기:"),
++    ("First Line Indent:", "첫 줄 들여쓰기:"),
++    ("Space Before:", "단락 앞 간격:"),
++    ("Space After:", "단락 뒤 간격:"),
++    ("Words with at Least:", "최소 단어 길이:"),
++    ("After First:", "하이픈 앞 최소 문자 수:"),
++    ("Before Last:", "하이픈 뒤 최소 문자 수:"),
++    ("Hyphen Limit:", "하이픈 연속 제한:"),
++    ("Word Spacing:", "단어 간격:"),
++    ("Letter Spacing:", "문자 간격:"),
++    ("Glyph Scaling:", "글리프 크기 조정:"),
++    ("Insert Kashidas:", "카시다 삽입:"),
++    ("In justified Arabic text", "균등 배치된 아랍어 텍스트에서"),
++    ("Korean Line Breaks:", "한글 줄 바꿈:"),
++    ("Between syllables (not only at spaces)", "음절 사이(공백에서만이 아님)"),
++    ("Binding:", "제본 방향:"),
++    ("Ruby:", "루비:"),
++    ("Set over the selected text; empty removes it.", "선택한 텍스트 위에 배치됩니다. 비우면 제거됩니다."),
++    ("[Basic Paragraph]", "[기본 단락]"),
++    ("[No Paragraph Style]", "[단락 스타일 없음]"),
++    ("Align left", "왼쪽 정렬"),
++    ("Align center", "가운데 정렬"),
++    ("Align right", "오른쪽 정렬"),
++    ("Justify with last line aligned left", "균등 배치(마지막 줄 왼쪽 정렬)"),
++    ("Justify with last line aligned center", "균등 배치(마지막 줄 가운데 정렬)"),
++    ("Justify with last line aligned right", "균등 배치(마지막 줄 오른쪽 정렬)"),
++    ("Justify all lines", "모든 줄 균등 배치"),
++    ("Align towards spine", "안쪽(제본 쪽) 정렬"),
++    ("Align away from spine", "바깥쪽 정렬"),
++    ("Create New Style from Selection", "선택 영역에서 새 스타일 만들기"),
++    ("No text selected", "선택한 텍스트 없음"),
++    ("Search", "검색"),
++    ("Essentials", "필수 항목"),
++    ("Advanced", "고급"),
++    ("Digital Publishing", "디지털 출판"),
++    ("Interactive for PDF", "대화형 PDF"),
++    ("Printing and Proofing", "인쇄 및 교정"),
++    ("Typography", "타이포그래피"),
++    ("Rulers & Grids", "눈금자 및 격자"),
++    ("No errors", "오류 없음"),
++    ("error", "오류"),
++    ("errors", "오류"),
++    ("Reset", "재설정"),
++    ("Right to Left", "오른쪽에서 왼쪽으로"),
++    ("Left to Right", "왼쪽에서 오른쪽으로"),
++    ("Portrait", "세로"),
++    ("Landscape", "가로"),
++    ("Display All Blacks as Rich Black", "모든 검정을 리치 블랙으로 표시"),
++    ("Display All Blacks Accurately", "모든 검정을 정확하게 표시"),
++    ("Output All Blacks as Rich Black", "모든 검정을 리치 블랙으로 출력"),
++    ("Output All Blacks Accurately", "모든 검정을 정확하게 출력"),
++    ("Top Margin", "위쪽 여백"),
++    ("Top of Page", "페이지 위쪽"),
++    ("Paragraph Styles panel", "단락 스타일 패널"),
++    ("Character Styles panel", "문자 스타일 패널"),
++    ("Create new style", "새 스타일 만들기"),
++    ("Clear overrides", "재정의 지우기"),
++    ("Apply", "적용"),
++    ("Accept", "수락"),
++    ("Reject", "거부"),
++    ("Add Selection", "선택 영역 추가"),
++    ("Align Stroke:", "획 정렬:"),
++    ("Angle", "각도"),
++    ("Angle:", "각도:"),
++    ("Baseline", "기준선"),
++    ("Cap:", "단면:"),
++    ("Cell Text", "셀 텍스트"),
++    ("Cell Type", "셀 유형"),
++    ("Composer", "컴포저"),
++    ("Convert to Text", "텍스트로 변환"),
++    ("Create New Layer", "새 레이어 만들기"),
++    ("Delete DTD", "DTD 삭제"),
++    ("Digits", "숫자"),
++    ("Direction", "방향"),
++    ("Distance", "거리"),
++    ("Distribute ↔", "가로 분포 ↔"),
++    ("Distribute ↕", "세로 분포 ↕"),
++    ("Effects: Drop Shadow", "효과: 그림자"),
++    ("Favorites", "즐겨찾기"),
++    ("First Spread", "첫 번째 펼침면"),
++    ("Gap Color:", "간격 색상:"),
++    ("Graphic…", "그래픽…"),
++    ("Home", "홈"),
++    ("Join:", "연결:"),
++    ("Language", "언어"),
++    ("Last Spread", "마지막 펼침면"),
++    ("Load DTD…", "DTD 불러오기…"),
++    ("Location:", "위치:"),
++    ("Lock Guides", "안내선 잠그기"),
++    ("Miter Limit:", "연귀 제한:"),
++    ("New Article from Selection", "선택 영역에서 새 아티클"),
++    ("New Note at Cursor", "커서 위치에 새 메모"),
++    ("New Swatch", "새 견본"),
++    ("New condition name", "새 조건 이름"),
++    ("New group…", "새 그룹…"),
++    ("New tag", "새 태그"),
++    ("Next Spread", "다음 펼침면"),
++    ("Note text", "메모 텍스트"),
++    ("Offset", "오프셋"),
++    ("Offsets", "오프셋"),
++    ("Paragraph alignment", "단락 정렬"),
++    ("Previous Spread", "이전 펼침면"),
++    ("Release to Objects", "개체로 풀기"),
++    ("Remove", "제거"),
++    ("Rotate 90° Counterclockwise", "시계 반대 방향으로 90° 회전"),
++    ("Rotation Angle", "회전 각도"),
++    ("Rows", "행 수"),
++    ("Run", "실행"),
++    ("Scale X Percentage", "가로 비율"),
++    ("Scale Y Percentage", "세로 비율"),
++    ("Search commands", "명령 검색"),
++    ("Search fonts", "글꼴 검색"),
++    ("Search styles and commands…", "스타일 및 명령 검색…"),
++    ("Search: character or U+code", "검색: 문자 또는 U+코드"),
++    ("Share", "공유"),
++    ("Shear X Angle", "가로 기울이기 각도"),
++    ("Show Baseline Grid", "기준선 격자 표시"),
++    ("Show Document Grid", "문서 격자 표시"),
++    ("Show Guides", "안내선 표시"),
++    ("Stop Color:", "정지점 색상:"),
++    ("Style", "스타일"),
++    ("Styles panel", "스타일 패널"),
++    ("Text", "텍스트"),
++    ("The structure is valid.", "구조가 유효합니다."),
++    ("Toggle double column", "2열 표시 전환"),
++    ("Tracking", "자간"),
++    ("Untag Selection", "선택 영역 태그 해제"),
++    ("Validate", "유효성 검사"),
++    ("Weight", "두께"),
++    ("Subtract", "빼기"),
++    ("Intersect", "교차"),
++    ("Exclude Overlap", "겹치는 영역 제외"),
++    ("Minus Back", "뒤쪽 개체 빼기"),
++    ("Align left edges", "왼쪽 가장자리 정렬"),
++    ("Align horizontal centers", "수평 중앙 정렬"),
++    ("Align right edges", "오른쪽 가장자리 정렬"),
++    ("Align top edges", "위쪽 가장자리 정렬"),
++    ("Align vertical centers", "수직 중앙 정렬"),
++    ("Align bottom edges", "아래쪽 가장자리 정렬"),
++    ("Align to Selection", "선택 영역에 정렬"),
++    ("Align to Key Object", "키 개체에 정렬"),
++    ("Align to Margins", "여백에 정렬"),
++    ("Align to Page", "페이지에 정렬"),
++    ("Align to Spread", "펼침면에 정렬"),
++    ("No Text Wrap", "텍스트 감싸기 없음"),
++    ("Wrap Around Bounding Box", "경계 상자에 텍스트 감싸기"),
++    ("Wrap Around Object Shape", "개체 모양에 텍스트 감싸기"),
++    ("Jump Object", "개체 건너뛰기"),
++    ("Jump to Next Column", "다음 단으로 이동"),
++    ("Bulleted List", "글머리 기호 목록"),
++    ("Numbered List", "번호 매기기 목록"),
++    ("UPPERCASE", "모두 대문자"),
++    ("Small Caps", "작은 대문자"),
++    ("Normal", "표준"),
++    ("Butt", "평평한 단면"),
++    ("Round", "둥근"),
++    ("Projecting", "돌출"),
++    ("Miter", "연귀"),
++    ("Bevel", "경사"),
++    ("Center", "가운데"),
++    ("Start/End:", "시작/끝:"),
++    ("Left", "왼쪽"),
++    ("Right", "오른쪽"),
++    ("First", "첫 줄"),
++    ("Last", "마지막 줄"),
++    ("Before", "앞"),
++    ("After", "뒤"),
++    ("Shading", "음영"),
++    ("Border", "테두리"),
++    ("Overprint Fill", "칠 중복 인쇄"),
++    ("Overprint Stroke", "획 중복 인쇄"),
++    ("Overprint Gap", "간격 중복 인쇄"),
++    ("Nonprinting", "인쇄 안 함"),
++    ("At Least", "최소"),
++    ("Exactly", "고정"),
++    ("Justify", "균등 배치"),
++    ("Underline Options", "밑줄 옵션"),
++    ("Strikethrough Options", "취소선 옵션"),
++    ("Discretionary Ligatures", "임의 합자"),
++    ("Fractions", "분수"),
++    ("Ordinal", "서수"),
++    ("Swash", "스워시"),
++    ("Titling Alternates", "제목 대체 문자"),
++    ("Contextual Alternates", "문맥 대체 문자"),
++    ("Slashed Zero", "슬래시 0"),
++    ("Tabular Lining", "표 형식 라이닝 숫자"),
++    ("Proportional Oldstyle", "비례 옛 스타일 숫자"),
++    ("Proportional Lining", "비례 라이닝 숫자"),
++    ("Tabular Oldstyle", "표 형식 옛 스타일 숫자"),
++    ("Default Figure Style", "기본 숫자 스타일"),
++    ("Not a button", "버튼 아님"),
++    ("Go To Next Page", "다음 페이지로 이동"),
++    ("Go To Previous Page", "이전 페이지로 이동"),
++    ("Go To First Page", "첫 페이지로 이동"),
++    ("Go To Last Page", "마지막 페이지로 이동"),
++    ("Go To Page", "페이지로 이동"),
++    ("Go To URL", "URL로 이동"),
++    ("Not a form field", "양식 필드 아님"),
++    ("Text Field", "텍스트 필드"),
++    ("Check Box", "확인란"),
++    ("Radio Button", "라디오 버튼"),
++    ("Combo Box", "콤보 상자"),
++    ("List Box", "목록 상자"),
++    ("Signature", "서명"),
++    ("Resize width", "너비 조정"),
++    ("Resize height", "높이 조정"),
++    ("Pin top", "위쪽 고정"),
++    ("Pin bottom", "아래쪽 고정"),
++    ("Pin left", "왼쪽 고정"),
++    ("Pin right", "오른쪽 고정"),
++    ("Inward", "안쪽으로"),
++    ("Metrics", "메트릭"),
++    ("Optical", "옵티컬"),
++    ("Applies to fill", "칠에 적용"),
++    ("Applies to text", "텍스트에 적용"),
++    ("Gray", "회색"),
++    ("Linear", "선형"),
++    ("Radial", "방사형"),
++    ("Arabic", "아랍어"),
++    ("Beveled Rectangle", "경사 모서리 사각형"),
++    ("Chinese", "중국어"),
++    ("Constrain proportions for width and height", "너비와 높이 비율 고정"),
++    ("Corner", "모퉁이"),
++    ("Custom", "사용자 정의"),
++    ("Czech", "체코어"),
++    ("Danish", "덴마크어"),
++    ("Dashed", "파선"),
++    ("Dotted", "점선"),
++    ("Dutch: 2005 Reform", "네덜란드어: 2005년 개정"),
++    ("Embedded", "포함됨"),
++    ("English: Canadian", "영어: 캐나다"),
++    ("English: UK", "영어: 영국"),
++    ("English: USA", "영어: 미국"),
++    ("Farsi", "페르시아어"),
++    ("Finnish", "핀란드어"),
++    ("Fit Frame to Content", "프레임을 내용에 맞추기"),
++    ("French", "프랑스어"),
++    ("French: Canadian", "프랑스어: 캐나다"),
++    ("German: 2006 Reform", "독일어: 2006년 개정"),
++    ("German: Swiss 2006 Reform", "독일어: 스위스 2006년 개정"),
++    ("Greek", "그리스어"),
++    ("Hebrew", "히브리어"),
++    ("Hindi", "힌디어"),
++    ("Hungarian", "헝가리어"),
++    ("Inverse Rounded Rectangle", "역 둥근 사각형"),
++    ("Italian", "이탈리아어"),
++    ("Japanese", "일본어"),
++    ("Korean", "한국어"),
++    ("Make all settings the same", "모든 설정을 동일하게"),
++    ("Native", "고유 숫자"),
++    ("Norwegian: Bokmål", "노르웨이어: 보크몰"),
++    ("Orthogonal Line", "직교선"),
++    ("Polish", "폴란드어"),
++    ("Portuguese", "포르투갈어"),
++    ("Portuguese: Brazilian", "포르투갈어: 브라질"),
++    ("Rounded Rectangle", "둥근 사각형"),
++    ("Russian", "러시아어"),
++    ("Solid", "실선"),
++    ("Spanish", "스페인어"),
++    ("Story Editor", "스토리 편집기"),
++    ("Swedish", "스웨덴어"),
++    ("Thick - Thick", "굵게 - 굵게"),
++    ("Thick - Thin", "굵게 - 가늘게"),
++    ("Thin - Thick", "가늘게 - 굵게"),
++    ("Thin - Thin", "가늘게 - 가늘게"),
++    ("Thin - Thick - Thin", "가늘게 - 굵게 - 가늘게"),
++    ("Thick - Thin - Thick", "굵게 - 가늘게 - 굵게"),
++    ("Wavy", "물결선"),
++    ("Straight Hash", "직선 해시"),
++    ("Stripes", "줄무늬"),
++    ("Triangle", "삼각형"),
++    ("Turkish", "터키어"),
++    ("Ukrainian", "우크라이나어"),
++    ("Cell Style", "셀 스타일"),
++    ("Table Style", "표 스타일"),
++    ("Col ←", "열 ←"),
++    ("Col →", "열 →"),
++    ("Row ↑", "행 ↑"),
++    ("Row ↓", "행 ↓"),
++    ("Hide Others", "다른 레이어 숨기기"),
++    ("Lock Others", "다른 레이어 잠그기"),
++    ("Show All Layers", "모든 레이어 표시"),
++    ("Unlock", "잠금 해제"),
++    ("Unlock All Layers", "모든 레이어 잠금 해제"),
++    ("Added", "추가됨"),
++    ("Deleted", "삭제됨"),
++    ("Guide-based", "안내선 기반"),
++    ("Loop", "반복 재생"),
++    ("Object-based", "개체 기반"),
++    ("Off", "끔"),
++    ("Play on Page Load", "페이지 로드 시 재생"),
++    ("Re-center", "다시 가운데로"),
++    ("Show Controls", "컨트롤 표시"),
++    ("Signature Field", "서명 필드"),
++    ("Select text to apply a condition", "조건을 적용할 텍스트를 선택하십시오"),
++    ("Blinds", "블라인드"),
++    ("Box", "상자"),
++    ("Comb", "빗살"),
++    ("Cover", "덮기"),
++    ("Dissolve", "디졸브"),
++    ("Fade", "페이드"),
++    ("Push", "밀어내기"),
++    ("Split", "분할"),
++    ("Uncover", "걷어내기"),
++    ("Wipe", "닦아내기"),
++    ("Simple", "단순형"),
++    ("Simple - Wide", "단순형 - 넓게"),
++    ("Triangle - Wide", "삼각형 - 넓게"),
++    ("Barbed", "미늘형"),
++    ("Curved", "곡선형"),
++    ("Circle", "원"),
++    ("Circle - Solid", "원 - 채움"),
++    ("Square", "정사각형"),
++    ("Square - Solid", "정사각형 - 채움"),
++    ("Bar", "막대"),
++    ("Fit Text", "텍스트에 맞추기"),
++    ("Preview (W)", "미리 보기 (W)"),
++    ("Normal (W)", "표준 (W)"),
++    ("objects", "개체"),
++    ("pages", "페이지"),
++    ("stories", "스토리"),
++    ("items", "항목"),
++    ("warnings", "경고"),
++    ("Render", "렌더링"),
++    ("Set", "세트"),
++    ("unused", "사용 안 함"),
++    ("⚠ Missing", "⚠ 누락됨"),
++    ("▲ Modified", "▲ 수정됨"),
++    ("(Text Color)", "(텍스트 색상)"),
++    ("{count} glyphs — click to insert at the text cursor", "글리프 {count}개 — 클릭하여 텍스트 커서 위치에 삽입"),
++    ("{pages} Pages in {spreads} Spreads", "{pages}페이지, {spreads}개 펼침면"),
++    (" (auto)", " (자동)"),
++    ("Absolute Numbering (instead of Section Numbering)", "절대 번호 매기기(섹션 번호 대신)"),
++    ("Add and remove pages as the primary text frame's story grows and shrinks", "기본 텍스트 프레임의 스토리 증감에 따라 페이지 추가 및 제거"),
++    ("Added Text (highlighted)", "추가된 텍스트(강조 표시)"),
++    ("Adjust Layout (objects follow the new page size)", "레이아웃 조정(개체가 새 페이지 크기를 따름)"),
++    ("Auto-Fit", "자동 맞춤"),
++    ("Case sensitive", "대/소문자 구분"),
++    ("Custom Tracking/Kerning", "사용자 정의 자간/커닝"),
++    ("Dimensions Include Stroke Weight", "크기에 획 두께 포함"),
++    ("Enable Autocorrect", "자동 고침 사용"),
++    ("Enable Dynamic Spelling (underline misspelled words)", "동적 맞춤법 검사 사용(맞춤법 오류에 밑줄)"),
++    ("Grids in Back", "격자를 뒤에 표시"),
++    ("H&J Violations", "H&J 위반"),
++    ("Include Bleed", "재단 여백 포함"),
++    ("Include Stroke Weight", "획 두께 포함"),
++    ("Join our Discord", "Discord 참여하기"),
++    ("Keep Violations", "유지 옵션 위반"),
++    ("Overprint [Black] Swatch at 100%", "[검정] 견본 100% 중복 인쇄"),
++    ("Printer's Marks", "프린터 표시"),
++    ("Remove Styles and Formatting from Text and Tables", "텍스트와 표에서 스타일 및 서식 제거"),
++    ("Ruby", "루비"),
++    ("Show Note Anchors in Layout View", "레이아웃 보기에서 메모 기준점 표시"),
++    ("Spreads", "펼침면"),
++    ("Substituted Fonts", "대체된 글꼴"),
++    ("Transformations are Totals", "변형 값을 합계로 표시"),
++    ("Use Black Point Compensation", "검정점 보정 사용"),
++    ("Use Typographer's Quotes", "인쇄용 따옴표 사용"),
++    ("Whole word", "단어 단위"),
++    ("Interface", "인터페이스"),
++    ("Advanced Type", "고급 문자"),
++    ("Composition", "컴포지션"),
++    ("Show Font Names in English", "글꼴 이름을 영어로 표시"),
++    ("Missing Glyphs", "누락된 글리프"),
++    ("Draw Missing Glyphs from Fallback Fonts", "대체 글꼴로 누락된 글리프 그리기"),
++    ("Units & Increments", "단위 및 증감"),
++    ("Grids", "격자"),
++    ("Guides & Pasteboard", "안내선 및 대지"),
++    ("Dictionary", "사전"),
++    ("Autocorrect", "자동 고침"),
++    ("Story Editor Display", "스토리 편집기 표시"),
++    ("File Handling", "파일 처리"),
++    ("Formatting affects container (J)", "컨테이너에 서식 적용 (J)"),
++    ("Formatting affects text (J)", "텍스트에 서식 적용 (J)"),
++    ("Apply None", "없음 적용"),
++    ("Height Only", "높이만"),
++    ("Width Only", "너비만"),
++    ("Height and Width", "높이 및 너비"),
++    ("Height only", "높이만"),
++    ("Width only", "너비만"),
++    ("Height and width", "높이 및 너비"),
++    ("Version", "버전"),
++    ("{count} characters don't fit", "{count}자가 넘침"),
++    ("document", "문서"),
++    ("story", "스토리"),
++    ("selection", "선택 영역"),
++    ("top", "위쪽"),
++    ("center", "가운데"),
++    ("bottom", "아래쪽"),
++    ("justify", "균등 배치"),
++    ("text", "텍스트"),
++    ("graphic", "그래픽"),
++    ("unassigned", "지정 안 됨"),
++    ("Perceptual", "지각적"),
++    ("Relative Colorimetric", "상대 색도계"),
++    ("Saturation", "채도"),
++    ("Absolute Colorimetric", "절대 색도계"),
++    ("No conflicts", "충돌 없음"),
++    ("Page (1–{count}):", "페이지 (1–{count}):"),
++    ("Fonts in Document: {count}    Missing: {missing}", "문서의 글꼴: {count}    누락: {missing}"),
++    ("No data source", "데이터 소스 없음"),
++    ("Select Data Source…", "데이터 소스 선택…"),
++    ("Data Merge", "데이터 병합"),
++    ("Preview", "미리 보기"),
++    ("Previous", "이전"),
++    ("Next", "다음"),
++    ("Record", "레코드"),
++    ("Merge options", "병합 옵션"),
++    ("All records", "모든 레코드"),
++    ("One record", "레코드 하나"),
++    ("Range", "범위"),
++    ("Records per page", "페이지당 레코드 수"),
++    ("Single record", "단일 레코드"),
++    ("Multiple records", "여러 레코드"),
++    ("Rows first", "행 우선"),
++    ("Columns first", "열 우선"),
++    ("Column spacing", "열 간격"),
++    ("Row spacing", "행 간격"),
++    ("Fit proportionally", "비율에 맞게 맞추기"),
++    ("Fill proportionally", "비율에 맞게 채우기"),
++    ("Fit content to frame", "내용을 프레임에 맞추기"),
++    ("Center in frame", "프레임 중앙에 배치"),
++    ("Link images", "이미지 링크"),
++    ("Vertical:", "세로 비율:"),
++    ("Horizontal:", "가로 비율:"),
++    ("Columns:", "단 수:"),
++    ("Limit", "상한"),
++    ("Bind to frame", "프레임에 바인딩"),
++    ("Insert field", "필드 삽입"),
++    ("Pass csv, rows, or bytes from the control channel.", "제어 채널에서 csv, rows 또는 bytes를 전달하십시오."),
++    ("Panels", "패널"),
++    ("Next Page", "다음 페이지"),
++    ("Previous Page", "이전 페이지"),
++    ("First Page", "첫 페이지"),
++    ("Last Page", "마지막 페이지"),
++    ("Object Styles", "개체 스타일"),
++    ("Row", "행"),
++    ("Column", "열"),
++    ("Rulers", "눈금자"),
++    ("Hide Guides", "안내선 숨기기"),
++    ("Hide Rulers", "눈금자 숨기기"),
++    ("Extras", "기타"),
++    ("Colour", "색상"),
++    ("Transparency", "투명도"),
++    ("Community", "커뮤니티"),
++    ("Join the community", "커뮤니티 참여"),
++    ("OK", "확인"),
++    ("Done", "완료"),
++    ("Orientation", "방향"),
++    ("Units", "단위"),
++    ("Number of Pages", "페이지 수"),
++    ("Start Page #", "시작 페이지 번호"),
++    ("Slug", "슬러그"),
++    ("Binding", "제본"),
++    ("Rotation", "회전"),
++    ("Flex Layout", "유연한 레이아웃"),
++    ("Auto Size", "자동 크기 조정"),
++    ("Kerning", "커닝"),
++    ("Alignment", "정렬"),
++    ("Indent", "들여쓰기"),
++    ("Space Before", "단락 앞 간격"),
++    ("Space After", "단락 뒤 간격"),
++    ("New Layer", "새 레이어"),
++    ("Colour Picker", "색상 피커"),
++    ("Find What", "찾을 내용"),
++    ("Change To", "바꿀 내용"),
++    ("Selection", "선택 영역"),
++    ("All Documents", "모든 문서"),
++    ("On", "켬"),
++    ("Document RGB", "문서 RGB"),
++    ("Document CMYK", "문서 CMYK"),
++    ("None (keep transparency)", "없음(투명도 유지)"),
++    ("High Resolution", "고해상도"),
++    ("Medium Resolution", "중간 해상도"),
++    ("Low Resolution", "저해상도"),
++    ("Delete Type from Path", "패스에서 문자 삭제"),
++    ("Bullet Character", "글머리 기호"),
++    ("Copyright Symbol", "저작권 기호"),
++    ("Ellipsis", "줄임표"),
++    ("Paragraph Symbol", "단락 기호"),
++    ("Registered Trademark Symbol", "등록 상표 기호"),
++    ("Section Symbol", "섹션 기호"),
++    ("Trademark Symbol", "상표 기호"),
++    ("Current Page Number", "현재 페이지 번호"),
++    ("Next Page Number", "다음 페이지 번호"),
++    ("Previous Page Number", "이전 페이지 번호"),
++    ("Section Marker", "섹션 표시자"),
++    ("Em Dash", "전각 대시"),
++    ("En Dash", "반각 대시"),
++    ("Discretionary Hyphen", "임의 하이픈"),
++    ("Nonbreaking Hyphen", "줄 바꿈 없는 하이픈"),
++    ("Double Left Quotation Marks", "왼쪽 큰따옴표"),
++    ("Double Right Quotation Marks", "오른쪽 큰따옴표"),
++    ("Single Left Quotation Mark", "왼쪽 작은따옴표"),
++    ("Single Right Quotation Mark", "오른쪽 작은따옴표"),
++    ("Straight Double Quotation Marks", "곧은 큰따옴표"),
++    ("Straight Single Quotation Mark (Apostrophe)", "곧은 작은따옴표(아포스트로피)"),
++    ("Tab", "탭"),
++    ("Right Indent Tab", "오른쪽 들여쓰기 탭"),
++    ("Indent to Here", "여기까지 들여쓰기"),
++    ("Em Space", "전각 공백"),
++    ("En Space", "반각 공백"),
++    ("Nonbreaking Space", "줄 바꿈 없는 공백"),
++    ("Hair Space", "극세 공백"),
++    ("Sixth Space", "1/6 공백"),
++    ("Thin Space", "좁은 공백"),
++    ("Quarter Space", "1/4 공백"),
++    ("Third Space", "1/3 공백"),
++    ("Punctuation Space", "구두점 공백"),
++    ("Figure Space", "숫자 공백"),
++    ("Flush Space", "채움 공백"),
++    ("Column Break", "단 나누기"),
++    ("Frame Break", "프레임 나누기"),
++    ("Page Break", "페이지 나누기"),
++    ("Paragraph Return", "단락 끝"),
++    ("Forced Line Break", "강제 줄 바꿈"),
++    ("lowercase", "소문자"),
++    ("Title Case", "제목 대/소문자"),
++    ("Sentence case", "문장 대/소문자"),
++    ("90° CW", "시계 방향 90°"),
++    ("90° CCW", "시계 반대 방향 90°"),
++    ("Clear Rotation", "회전 지우기"),
++    ("Working CMYK", "작업 CMYK"),
++    ("Internet Standard RGB (sRGB)", "인터넷 표준 RGB(sRGB)"),
++    ("Legacy Macintosh RGB", "레거시 Macintosh RGB"),
++    ("Monitor RGB", "모니터 RGB"),
++    ("Color Blindness – Protanopia", "색맹 – 적색맹"),
++    ("Color Blindness – Deuteranopia", "색맹 – 녹색맹"),
++    ("Simulate Paper Color", "종이 색상 시뮬레이션"),
++    ("Cyan", "녹청"),
++    ("Magenta", "마젠타"),
++    ("Yellow", "노랑"),
++    ("Black", "검정"),
++    ("Ink Limit 300%", "잉크 한도 300%"),
++    ("Transform Again Individually", "개별적으로 다시 변형"),
++    ("Transform Sequence Again", "변형 순서 다시 적용"),
++    ("Transform Sequence Again Individually", "개별적으로 변형 순서 다시 적용"),
++    ("Open Path", "열린 패스"),
++    ("Closed Path", "닫힌 패스"),
++    ("Alpha Channel", "알파 채널"),
++    ("Detect Edges", "가장자리 감지"),
++    ("Generate Live Caption", "라이브 캡션 생성"),
++    ("Graphic", "그래픽"),
++    ("Unassigned", "할당되지 않음"),
++    ("Preflight", "프리플라이트"),
++    ("Conditional Text", "조건부 텍스트"),
++    ("Scripts", "스크립트"),
++    ("Dark", "어둡게"),
++    ("Medium Dark", "중간 어둡게"),
++    ("Medium Light", "중간 밝게"),
++    ("Light", "밝게"),
++    ("High Contrast", "고대비"),
++    ("Story Column Direction", "스토리 단 방향"),
++    ("Smart Guide Options", "스마트 안내선 옵션"),
++    ("Bleed:", "재단 여백:"),
++    ("Slug:", "슬러그:"),
++    ("Margins:", "여백:"),
++    ("Top:", "위쪽:"),
++    ("Bottom:", "아래쪽:"),
++    ("Left:", "왼쪽:"),
++    ("Right:", "오른쪽:"),
++    ("CMYK:", "CMYK:"),
++    ("RGB:", "RGB:"),
++    ("URL:", "URL:"),
++    ("Subscript:", "아래 첨자:"),
++    ("Superscript:", "위 첨자:"),
++    ("Join the ArtCraft Discord", "ArtCraft Discord 참여"),
++    ("Paragraph Rules…", "단락 경계선…"),
++    ("Paragraph Rules", "단락 경계선"),
++    ("Warichu", "할주"),
++    ("180°", "180°"),
++    ("Add Anchor Point Tool", "고정점 추가 도구"),
++    ("Color Theme Tool", "색상 테마 도구"),
++    ("Content Collector Tool", "콘텐츠 수집 도구"),
++    ("Content Placer Tool", "콘텐츠 배치 도구"),
++    ("Convert Direction Point Tool", "방향점 변환 도구"),
++    ("Data Fields", "데이터 필드"),
++    ("Data Merge Options", "데이터 병합 옵션"),
++    ("Delete Anchor Point Tool", "고정점 삭제 도구"),
++    ("Direct Selection Tool", "직접 선택 도구"),
++    ("Distribute Rows Evenly", "행을 균등하게 분배"),
++    ("Drag Rows or Columns", "행 또는 열 드래그"),
++    ("Ellipse Frame Tool", "타원 프레임 도구"),
++    ("Ellipse Tool", "타원 도구"),
++    ("Erase Tool", "지우개 도구"),
++    ("Even Page Break", "짝수 페이지 나누기"),
++    ("Eyedropper Tool", "스포이드 도구"),
++    ("Free Transform Tool", "자유 변형 도구"),
++    ("Gap Tool", "간격 도구"),
++    ("Gradient Feather Tool", "그레이디언트 페더 도구"),
++    ("Gradient Swatch Tool", "그레이디언트 견본 도구"),
++    ("Hand Tool", "손 도구"),
++    ("Insert Field", "필드 삽입"),
++    ("Line Tool", "선 도구"),
++    ("List Composite Fonts", "합성 글꼴 목록"),
++    ("Measure Tool", "측정 도구"),
++    ("Note Tool", "메모 도구"),
++    ("Object & Layout", "개체 및 레이아웃"),
++    ("Odd Page Break", "홀수 페이지 나누기"),
++    ("Page Tool", "페이지 도구"),
++    ("Pen Tool", "펜 도구"),
++    ("Pencil Tool", "연필 도구"),
++    ("Pin Bar Position", "막대 위치 고정"),
++    ("Polygon Frame Tool", "다각형 프레임 도구"),
++    ("Polygon Tool", "다각형 도구"),
++    ("Preview Record", "레코드 미리 보기"),
++    ("Rectangle Frame Tool", "사각형 프레임 도구"),
++    ("Rectangle Tool", "사각형 도구"),
++    ("Remove Data Source", "데이터 소스 제거"),
++    ("Remove Field", "필드 제거"),
++    ("Reset Bar Position", "막대 위치 재설정"),
++    ("Rotate Tool", "회전 도구"),
++    ("Scale Tool", "크기 조절 도구"),
++    ("Scissors Tool", "가위 도구"),
++    ("Selection Tool", "선택 도구"),
++    ("Set Composite Font", "합성 글꼴 설정"),
++    ("Shear Tool", "기울이기 도구"),
++    ("Smooth Tool", "매끄럽게 도구"),
++    ("Stop Preview", "미리 보기 중지"),
++    ("Type Tool", "문자 도구"),
++    ("Type on a Path Tool", "패스 상의 문자 도구"),
++    ("Update Data Source", "데이터 소스 업데이트"),
++    ("Validate from Root Element", "루트 요소부터 유효성 검사"),
++    ("Vertical Type Tool", "세로 문자 도구"),
++    ("Vertical Type on a Path Tool", "패스 상의 세로 문자 도구"),
++    ("Zoom Tool", "돋보기 도구"),
++    ("A, B, C, D...", "A, B, C, D..."),
++    ("Advanced Character Formats", "고급 문자 서식"),
++    ("Anchored Object Options", "고정된 개체 옵션"),
++    ("Apply Attributes (Eyedropper", "속성 적용(스포이드"),
++    ("Apply Parent to Pages", "페이지에 상위 페이지 적용"),
++    ("ArtCraft App Page", "ArtCraft 앱 페이지"),
++    ("ArtCraft Website", "ArtCraft 웹 사이트"),
++    ("Baseline Shift:", "기준선 이동:"),
++    ("Bleed Marks", "재단 여백 표시"),
++    ("Bottom Inset", "아래쪽 인세트"),
++    ("Can't Open the File", "파일을 열 수 없습니다"),
++    ("Can't Place the File", "파일을 가져올 수 없습니다"),
++    ("Case:", "대/소문자:"),
++    ("Change All (Object", "모두 바꾸기(개체"),
++    ("Character Style Options", "문자 스타일 옵션"),
++    ("Check Spelling", "맞춤법 검사"),
++    ("Column Rules", "단 경계선"),
++    ("Commercial Printing", "상업 인쇄"),
++    ("Compress images", "이미지 압축"),
++    ("Compression", "압축"),
++    ("Copy Link(s", "링크 복사("),
++    ("Corner Options", "모퉁이 옵션"),
++    ("Create Guides", "안내선 만들기"),
++    ("Crop Marks", "재단선 표시"),
++    ("Define Cross-Reference Format", "상호 참조 형식 정의"),
++    ("Define Lists", "목록 정의"),
++    ("Define Text Variable", "텍스트 변수 정의"),
++    ("DesignCraft Website", "DesignCraft 웹 사이트"),
++    ("DesignCraft on GitHub", "GitHub의 DesignCraft"),
++    ("Desktop Printing", "사무용 인쇄"),
++    ("Document Endnote Options", "문서 미주 옵션"),
++    ("Document Footnote Options", "문서 각주 옵션"),
++    ("Edit \"{name}\"…", "\"{name}\" 편집…"),
++    ("Edit/Interface Language", "편집/인터페이스 언어"),
++    ("Edit/Spelling", "편집/맞춤법"),
++    ("Edit/Transparency Blend Space", "편집/투명도 혼합 공간"),
++    ("Edit/Transparency Flattener Presets", "편집/투명도 병합 사전 설정"),
++    ("Export EPUB", "EPUB 내보내기"),
++    ("Export EPUB (Fixed Layout", "EPUB 내보내기(고정 레이아웃"),
++    ("Export EPUB (Fixed Layout)", "EPUB 내보내기(고정 레이아웃)"),
++    ("Export EPUB (Reflowable", "EPUB 내보내기(리플로우"),
++    ("Export EPUB (Reflowable)", "EPUB 내보내기(리플로우)"),
++    ("Export HTML", "HTML 내보내기"),
++    ("Export IDML", "IDML 내보내기"),
++    ("Export PDF", "PDF 내보내기"),
++    ("Export PDF (Interactive)", "PDF 내보내기(대화형)"),
++    ("Export Page as PNG", "페이지를 PNG로 내보내기"),
++    ("Export Text", "텍스트 내보내기"),
++    ("Export XML", "XML 내보내기"),
++    ("Figure Style:", "숫자 스타일:"),
++    ("File/Export", "파일/내보내기"),
++    ("Flattener preset", "병합 사전 설정"),
++    ("GREP", "GREP"),
++    ("Generate Index", "색인 생성"),
++    ("Global Light", "전체 조명"),
++    ("Horizontal Offset", "가로 오프셋"),
++    ("Horizontal Scale:", "가로 비율:"),
++    ("I, II, III, IV...", "I, II, III, IV..."),
++    ("Import XML", "XML 가져오기"),
++    ("Include document bleed", "문서 재단 여백 포함"),
++    ("Insert Anchored Object", "고정된 개체 삽입"),
++    ("Insert Column Rule", "단 경계선 삽입"),
++    ("Insert Cross-Reference", "상호 참조 삽입"),
++    ("Insert Math Expression", "수식 삽입"),
++    ("Insert Pages", "페이지 삽입"),
++    ("Kerning:", "커닝:"),
++    ("Language:", "언어:"),
++    ("Layout/Index", "레이아웃/색인"),
++    ("Layout/Pages", "레이아웃/페이지"),
++    ("Ligatures", "합자"),
++    ("Load DTD", "DTD 불러오기"),
++    ("Load Swatches", "견본 불러오기"),
++    ("Margins and Columns", "여백 및 단"),
++    ("Marks and Bleeds", "표시 및 재단 여백"),
++    ("Menus", "메뉴"),
++    ("Move Pages", "페이지 이동"),
++    ("New Condition", "새 조건"),
++    ("New Hyperlink", "새 하이퍼링크"),
++    ("New Hyperlink Destination", "새 하이퍼링크 대상"),
++    ("New Page Reference", "새 페이지 참조"),
++    ("New Parent", "새 상위 페이지"),
++    ("New Stroke Style", "새 획 스타일"),
++    ("No Break", "줄바꿈 없음"),
++    ("Numbering & Section Options", "페이지 번호 및 섹션 옵션"),
++    ("Object/Anchored Object", "개체/고정된 개체"),
++    ("Object/Arrange", "개체/정돈"),
++    ("Object/Captions", "개체/캡션"),
++    ("Object/Clipping Path", "개체/클리핑 패스"),
++    ("Object/Content", "개체/내용"),
++    ("Object/Convert Shape", "개체/모양 변환"),
++    ("Object/Effects", "개체/효과"),
++    ("Object/Fitting", "개체/맞춤"),
++    ("Object/Pathfinder", "개체/패스파인더"),
++    ("Object/Paths", "개체/패스"),
++    ("Object/Select", "개체/선택"),
++    ("Object/Transform", "개체/변형"),
++    ("Object/Transform Again", "개체/변형 반복"),
++    ("OpenType All Small Caps", "OpenType 모두 작은 대문자"),
++    ("OpenType Denominator", "OpenType 분모"),
++    ("OpenType Features", "OpenType 기능"),
++    ("OpenType Numerator", "OpenType 분자"),
++    ("OpenType Subscript", "OpenType 아래 첨자"),
++    ("PDF/A-2b", "PDF/A-2b"),
++    ("PDF/X-4", "PDF/X-4"),
++    ("Package", "패키지"),
++    ("Page Information", "페이지 정보"),
++    ("Page Range", "페이지 범위"),
++    ("Page Range:", "페이지 범위:"),
++    ("Picas", "파이카"),
++    ("Place with Import Options", "가져오기 옵션과 함께 가져오기"),
++    ("Preset:", "사전 설정:"),
++    ("Print Booklet", "소책자 인쇄"),
++    ("Quick Apply", "빠른 적용"),
++    ("Relink", "다시 링크"),
++    ("Relink to Folder", "폴더에 다시 링크"),
++    ("Report an Issue", "문제 보고"),
++    ("Rule Below", "아래쪽 선"),
++    ("Save As", "다른 이름으로 저장"),
++    ("Save Swatches for Exchange", "교환용 견본 저장"),
++    ("Save a Copy", "사본 저장"),
++    ("Screen and Email", "화면 및 이메일"),
++    ("Skew:", "기울이기:"),
++    ("Standard", "표준"),
++    ("Standard:", "표준:"),
++    ("Step and Repeat", "단계 및 반복"),
++    ("Strikethrough On", "취소선 사용"),
++    ("Style Settings:", "스타일 설정:"),
++    ("Subscript", "아래 첨자"),
++    ("Table of Contents", "목차"),
++    ("Table/Convert Cell Type", "표/셀 유형 변환"),
++    ("Table/Delete", "표/삭제"),
++    ("Table/Insert", "표/삽입"),
++    ("Table/Select", "표/선택"),
++    ("Tagged PDF", "태그가 지정된 PDF"),
++    ("Tint %", "색조 %"),
++    ("Tint:", "색조:"),
++    ("Top Inset", "위쪽 인세트"),
++    ("Type on a Path Options", "패스 상의 문자 옵션"),
++    ("Type/Bulleted and Numbered Lists", "문자/글머리 기호 및 번호 매기기"),
++    ("Type/Change Case", "문자/대/소문자 변경"),
++    ("Type/Hyperlinks & Cross-References", "문자/하이퍼링크 및 상호 참조"),
++    ("Type/Insert Break Character", "문자/나누기 문자 삽입"),
++    ("Type/Insert Special Character/Hyphens and Dashes", "문자/특수 문자 삽입/하이픈 및 대시"),
++    ("Type/Insert Special Character/Markers", "문자/특수 문자 삽입/마커"),
++    ("Type/Insert Special Character/Other", "문자/특수 문자 삽입/기타"),
++    ("Type/Insert Special Character/Quotation Marks", "문자/특수 문자 삽입/따옴표"),
++    ("Type/Insert Special Character/Symbols", "문자/특수 문자 삽입/기호"),
++    ("Type/Insert White Space", "문자/공백 삽입"),
++    ("Type/Proof Setup", "문자/교정 설정"),
++    ("Type/Rotate Spread", "문자/펼침면 회전"),
++    ("Type/Separations Preview", "문자/분판 미리 보기"),
++    ("Type/Story Direction", "문자/스토리 방향"),
++    ("Type/Text Variables", "문자/텍스트 변수"),
++    ("Type/Track Changes", "문자/변경 내용 추적"),
++    ("Type/Type on a Path", "문자/패스 상의 문자"),
++    ("Underline On", "밑줄 사용"),
++    ("Vertical Scale:", "세로 비율:"),
++    ("View/Display Performance", "보기/표시 성능"),
++    ("View/Grids & Guides", "보기/격자 및 안내선"),
++    ("Window/Arrange", "창/정렬"),
++    ("Window/Interactive", "창/대화형"),
++    ("Window/Interface Color Theme", "창/인터페이스 색상 테마"),
++    ("Window/Output", "창/출력"),
++    ("Window/Panels", "창/패널"),
++    ("Window/Type & Tables", "창/문자 및 표"),
++    ("Window/Utilities", "창/유틸리티"),
++    ("a, b, c, d...", "a, b, c, d..."),
++    ("i, ii, iii, iv...", "i, ii, iii, iv..."),
++    // DesignCraft 0.7.1: strings PR #395 doesn't have.
++    ("Activate Panel", "패널 활성화"),
++    ("Change Panel Layout", "패널 레이아웃 변경"),
++    ("Close Panel", "패널 닫기"),
++    ("Move Panel", "패널 이동"),
++    ("Resize panel window", "패널 창 크기 조정"),
++    ("Resize panels", "패널 크기 조정"),
++    ("Group with", "다음과 그룹화"),
++    ("Unsaved Changes", "저장되지 않은 변경 사항"),
++    ("Don't Save", "저장 안 함"),
++    ("“{}” has changes that are not saved. Save them before closing?", "“{}”에 저장되지 않은 변경 사항이 있습니다. 닫기 전에 저장하시겠습니까?"),
++    (
++        "Collect objects with the Content Collector (B); place them with the Content Placer.",
++        "콘텐츠 수집 도구(B)로 개체를 수집하고 콘텐츠 배치 도구로 배치합니다.",
++    ),
++    (
++        "No conditions. Create one, then select text and click it to apply.",
++        "조건이 없습니다. 조건을 만든 다음 텍스트를 선택하고 조건을 클릭하여 적용하십시오.",
++    ),
++    (
++        "No hyperlinks. Select text or a frame, type a URL and click New.",
++        "하이퍼링크가 없습니다. 텍스트나 프레임을 선택하고 URL을 입력한 다음 새로 만들기를 클릭하십시오.",
++    ),
++    (
++        "Select a placed video or sound (File › Place a .mp4, .mov, .mp3, .wav …).",
++        "가져온 비디오나 사운드를 선택하십시오(파일 › 가져오기로 .mp4, .mov, .mp3, .wav … 가져오기).",
++    ),
++    (
++        "Select two or more objects (or a group) to make a multi-state object.",
++        "다중 상태 개체를 만들려면 개체를 두 개 이상(또는 그룹을) 선택하십시오.",
++    ),
++    (
++        "Type a word with ~ at each allowed break (ex~am~ple); without ~ the word is never hyphenated.",
++        "허용되는 분리 위치마다 ~를 넣어 단어를 입력하십시오(ex~am~ple). ~가 없는 단어는 하이픈으로 분리되지 않습니다.",
++    ),
++];
+diff --git a/crates/ui-egui/src/menus.rs b/crates/ui-egui/src/menus.rs
+index d123ec4..d882792 100644
+--- a/crates/ui-egui/src/menus.rs
++++ b/crates/ui-egui/src/menus.rs
+@@ -261,6 +261,7 @@ pub const MENUS: &[(&str, &[&str])] = &[
+             "ui:app.language|Español|{\"lang\": \"es\"}",
+             "ui:app.language|日本語|{\"lang\": \"ja\"}",
+             "ui:app.language|简体中文|{\"lang\": \"zh\"}",
++            "ui:app.language|한국어|{\"lang\": \"ko\"}",
+             "ui:app.language|العربية|{\"lang\": \"ar\"}",
+             "ui:app.language|Português (Brasil)|{\"lang\": \"pt-br\"}",
+             "ui:app.language|Italiano|{\"lang\": \"it\"}",
+@@ -2635,6 +2636,45 @@ mod tests {
+         assert!(!bars[0].intersects(bars[1]), "each pane keeps its own bar: {bars:?}");
+     }
+ 
++    /// Edit › Interface Language offers every supported language, and each one switches
++    /// (from PR #395 by con3code).
++    #[test]
++    fn interface_language_menu_lists_every_language() {
++        fn walk(items: &[Item], out: &mut Vec<(String, String)>) {
++            for it in items {
++                match it {
++                    Item::Sub(_, children) => walk(children, out),
++                    Item::Cmd { label, id, params, .. } if id == "app.language" => {
++                        out.push((label.clone(), params["lang"].as_str().unwrap_or("").to_string()))
++                    }
++                    _ => {}
++                }
++            }
++        }
++        let mut entries = Vec::new();
++        for (_, items) in menu_tree() {
++            walk(&items, &mut entries);
++        }
++        let expected: Vec<(String, String)> = crate::i18n::LANGUAGES.iter().map(|(code, name)| (name.to_string(), code.to_string())).collect();
++        assert_eq!(entries.len(), expected.len(), "{entries:?}");
++        for e in &expected {
++            assert!(entries.contains(e), "missing {e:?} in {entries:?}");
++        }
++        assert!(entries.contains(&("한국어".to_string(), "ko".to_string())), "{entries:?}");
++        let mut app = crate::DesignApp::new(designcraft_engine::Session::new(), crate::Services::default());
++        for (_, code) in &expected {
++            run_ui(&mut app, "app.language", &json!({"lang": code})).unwrap().unwrap();
++            assert_eq!(&app.ui.language, code);
++            assert_eq!(checked(&app, "app.language", &json!({"lang": code})), Some(true));
++        }
++        // Korean menus: every menu title is translated.
++        run_ui(&mut app, "app.language", &json!({"lang": "ko"})).unwrap().unwrap();
++        for (title, _) in menu_tree() {
++            assert_ne!(crate::i18n::tr("ko", title), title, "{title}");
++        }
++        assert_eq!(crate::i18n::tr(&app.ui.language, "Window"), "창");
++    }
++
+     #[test]
+     fn interface_language_switches_and_validates() {
+         let mut app = crate::DesignApp::new(designcraft_engine::Session::new(), crate::Services::default());
+diff --git a/crates/ui-egui/src/theme.rs b/crates/ui-egui/src/theme.rs
+index 193abf3..4389e1d 100644
+--- a/crates/ui-egui/src/theme.rs
++++ b/crates/ui-egui/src/theme.rs
+@@ -262,7 +262,9 @@ pub fn install_fonts(ctx: &egui::Context, lang: &str) {
+ /// `CRAFT_FONTS_DIR`) as fallbacks at the end of every family: Japanese (BIZ UDPGothic first) and
+ /// Simplified Chinese, in the interface language's order, then Arabic. The `arabic` families
+ /// put the Arabic face first for right-to-left runs. egui has no system-font discovery, so
+-/// without craft-fonts CJK and Arabic UI text has no glyphs.
++/// without craft-fonts CJK and Arabic UI text has no glyphs — except Korean: with `lang` "ko"
++/// the craft-fonts faces with Hangul come first, and without one an installed Hangul face
++/// (Malgun Gothic on Windows, see [`HANGUL_UI_FAMILIES`]) is loaded.
+ fn font_definitions(craft: &'static [designcraft_fonts::CraftFont], lang: &str) -> FontDefinitions {
+     let mut fonts = FontDefinitions::default();
+     let add = |fonts: &mut FontDefinitions, name: &str, data: &'static [u8]| {
+@@ -280,31 +282,161 @@ fn font_definitions(craft: &'static [designcraft_fonts::CraftFont], lang: &str)
+     japanese.sort_by_key(|f| (f.family != "BIZ UDPGothic", f.style != "Regular"));
+     let chinese = pick("Hans");
+     let arabic = pick("Arab");
++    // Faces with Hangul (Noto Sans CJK has it whatever its region), Regular first.
++    let mut hangul: Vec<&designcraft_fonts::CraftFont> =
++        craft.iter().filter(|f| designcraft_fonts::missing_chars(f.bytes, 0, HANGUL_PROBE).is_empty()).collect();
++    hangul.sort_by_key(|f| f.style != "Regular");
+     let name = |f: &designcraft_fonts::CraftFont| format!("craft-{}-{}", f.family, f.style);
+-    for f in japanese.iter().chain(&chinese).chain(&arabic) {
++    for f in japanese.iter().chain(&chinese).chain(&arabic).chain(&hangul) {
+         add(&mut fonts, &name(f), f.bytes);
+     }
++    // The Korean UI: the embedded Hangul faces first, else an installed one (looked up only for
++    // Korean, so other languages never scan the system fonts).
++    let korean = lang == "ko";
++    let system = if korean && hangul.is_empty() { system_hangul_face() } else { None };
++    if let Some(face) = system {
++        fonts.font_data.insert(SYSTEM_HANGUL.into(), Arc::new(FontData { index: face.index, ..FontData::from_static(face.bytes()) }));
++    }
+     // Han characters take the forms of the interface language: Chinese faces first for zh.
+     let zh = lang.starts_with("zh");
+     for (family, stack) in fonts.families.iter_mut() {
+         let bold = *family == FontFamily::Name("semibold".into());
+         let mut ja = japanese.clone();
++        let mut ko = hangul.clone();
+         if bold {
+             ja.sort_by_key(|f| (f.family != "BIZ UDPGothic", f.style != "Bold"));
++            ko.sort_by_key(|f| f.style != "Bold");
+         }
+         let (first, second) = if zh { (&chinese, &ja) } else { (&ja, &chinese) };
+-        stack.extend(first.iter().chain(second).chain(&arabic).map(|f| name(f)));
++        let mut cjk: Vec<String> = Vec::new();
++        if korean {
++            cjk.extend(ko.iter().map(|f| name(f)));
++            cjk.extend(system.map(|_| SYSTEM_HANGUL.to_string()));
++        }
++        cjk.extend(first.iter().chain(second).chain(&arabic).chain(&ko).map(|f| name(f)));
++        let mut seen = std::collections::HashSet::new();
++        stack.extend(cjk.into_iter().filter(|n| seen.insert(n.clone())));
+     }
+     // Arabic runs (rtl.rs): the Arabic face first, so letters and spaces shape as one run.
+     for family in ["arabic", "arabic-semibold"] {
+         let ui = if family == "arabic" { "ui" } else { "ui-semibold" };
+-        let stack = arabic.iter().map(|f| name(f)).chain([ui.to_string(), "ui".to_string()]).chain(japanese.iter().chain(&chinese).map(|f| name(f)));
++        let stack = arabic
++            .iter()
++            .map(|f| name(f))
++            .chain([ui.to_string(), "ui".to_string()])
++            .chain(japanese.iter().chain(&chinese).chain(&hangul).map(|f| name(f)));
+         let mut seen = std::collections::HashSet::new();
+         fonts.families.insert(FontFamily::Name(family.into()), stack.filter(|n| seen.insert(n.clone())).collect());
+     }
+     fonts
+ }
+ 
++/// Installed families tried, in order, for the Korean UI's Hangul when no craft-fonts face has
++/// it: Windows (Malgun Gothic, in every Windows since Vista), macOS, then Linux and Pan-CJK
++/// families (the Noto and Source Han CJK faces have Hangul whatever their region), then older
++/// Windows Korean faces.
++const HANGUL_UI_FAMILIES: &[&str] = &[
++    "Malgun Gothic",
++    "Apple SD Gothic Neo",
++    "Noto Sans CJK KR",
++    "Noto Sans KR",
++    "Source Han Sans K",
++    "Source Han Sans KR",
++    "NanumGothic",
++    "Noto Sans CJK SC",
++    "Noto Sans CJK JP",
++    "Source Han Sans SC",
++    "Gulim",
++    "Dotum",
++];
++
++/// The usual files of the first families, read straight from the system font folders without a
++/// font scan: (file, face index, family).
++#[cfg(not(target_arch = "wasm32"))]
++const HANGUL_UI_FILES: &[(&str, u32, &str)] = &[("malgun.ttf", 0, "Malgun Gothic"), ("AppleSDGothicNeo.ttc", 0, "Apple SD Gothic Neo")];
++
++/// A face counts as Hangul-capable when it has these (first, common and last syllables).
++const HANGUL_PROBE: &str = "가각한글힣";
++
++/// Font-data name of the installed Hangul face in [`font_definitions`].
++const SYSTEM_HANGUL: &str = "system-hangul";
++
++/// An installed face with Hangul for the Korean UI.
++struct SystemFace {
++    family: String,
++    index: u32,
++    data: SystemData,
++}
++
++/// (The web finds no installed face.)
++#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
++enum SystemData {
++    /// Read from one of the usual files.
++    File(Vec<u8>),
++    /// Loaded through the font database.
++    Db(Arc<designcraft_fonts::FontFace>),
++}
++
++impl SystemFace {
++    fn bytes(&self) -> &[u8] {
++        match &self.data {
++            SystemData::File(data) => data,
++            SystemData::Db(face) => face.data(),
++        }
++    }
++}
++
++/// The installed Hangul face for the Korean UI, looked up once (the first time Korean is
++/// selected): the files of [`HANGUL_UI_FILES`], else [`HANGUL_UI_FAMILIES`] through the font
++/// database. None on the web.
++fn system_hangul_face() -> Option<&'static SystemFace> {
++    static FACE: std::sync::OnceLock<Option<SystemFace>> = std::sync::OnceLock::new();
++    FACE.get_or_init(|| {
++        let face = find_system_hangul_face();
++        match &face {
++            Some(f) => log::info!("Korean interface: Hangul from the installed {} (face {})", f.family, f.index),
++            None => log::warn!("Korean interface: no installed Hangul face among {HANGUL_UI_FAMILIES:?}; Hangul shows as boxes"),
++        }
++        face
++    })
++    .as_ref()
++}
++
++#[cfg(target_arch = "wasm32")]
++fn find_system_hangul_face() -> Option<SystemFace> {
++    None
++}
++
++#[cfg(not(target_arch = "wasm32"))]
++fn find_system_hangul_face() -> Option<SystemFace> {
++    /// Larger files aren't read (the Pan-CJK collections are about 30 MB).
++    const MAX_FILE: u64 = 64 << 20;
++    let has_hangul = |data: &[u8], index: u32| designcraft_fonts::missing_chars(data, index, HANGUL_PROBE).is_empty();
++    for dir in designcraft_fonts::system_font_dirs() {
++        for (file, index, family) in HANGUL_UI_FILES {
++            let path = dir.join(file);
++            if path.metadata().is_ok_and(|m| m.is_file() && m.len() <= MAX_FILE)
++                && let Ok(data) = std::fs::read(&path)
++                && has_hangul(&data, *index)
++            {
++                return Some(SystemFace { family: (*family).to_owned(), index: *index, data: SystemData::File(data) });
++            }
++        }
++    }
++    let db = designcraft_fonts::FontDb::global();
++    for family in HANGUL_UI_FAMILIES {
++        if !db.has_family(family) {
++            continue;
++        }
++        // `face` falls back to another family when this one won't load.
++        let face = db.face(family, "Regular");
++        if face.family.eq_ignore_ascii_case(family) && has_hangul(face.data(), face.index()) {
++            return Some(SystemFace { family: face.family.clone(), index: face.index(), data: SystemData::Db(face) });
++        }
++    }
++    None
++}
++
+ pub fn semibold(size: f32) -> FontId {
+     FontId::new(size, FontFamily::Name("semibold".into()))
+ }
+@@ -418,6 +550,110 @@ mod japanese_font_tests {
+     }
+ }
+ 
++#[cfg(test)]
++mod korean_font_tests {
++    use egui::FontFamily;
++
++    fn families() -> [FontFamily; 3] {
++        [FontFamily::Proportional, FontFamily::Monospace, FontFamily::Name("semibold".into())]
++    }
++
++    /// Every Hangul letter the Korean catalog shows, each once.
++    fn catalog_hangul() -> String {
++        let mut seen = std::collections::BTreeSet::new();
++        for text in crate::i18n::korean_catalog() {
++            seen.extend(text.chars().filter(|c| matches!(*c as u32, 0x1100..=0x11FF | 0x3130..=0x318F | 0xA960..=0xA97F | 0xAC00..=0xD7A3)));
++        }
++        seen.into_iter().collect()
++    }
++
++    /// The characters of `text` no face of `family` in `defs` has: what egui would draw as boxes.
++    fn tofu(defs: &egui::FontDefinitions, family: &FontFamily, text: &str) -> Vec<char> {
++        let mut left: String = text.into();
++        for name in &defs.families[family] {
++            let data = &defs.font_data[name];
++            left = designcraft_fonts::missing_chars(&data.font, data.index, &left).into_iter().collect();
++        }
++        left.chars().collect()
++    }
++
++    /// The Korean UI's Hangul face, by font-data name: the first face of the stack with Hangul.
++    fn hangul_face(defs: &egui::FontDefinitions, family: &FontFamily) -> Option<String> {
++        defs.families[family]
++            .iter()
++            .find(|n| designcraft_fonts::missing_chars(&defs.font_data[*n].font, defs.font_data[*n].index, "가힣").is_empty())
++            .cloned()
++    }
++
++    #[test]
++    fn the_korean_catalog_needs_hangul() {
++        let hangul = catalog_hangul();
++        assert!(hangul.chars().count() > 300, "{}", hangul.chars().count());
++    }
++
++    /// With craft-fonts that have Hangul (Noto Sans CJK), the Korean UI draws it with that
++    /// embedded face, ahead of the Japanese and Chinese ones, and has every catalog syllable.
++    #[test]
++    fn korean_ui_uses_the_embedded_hangul_face() {
++        let craft = designcraft_fonts::CRAFT_FONTS;
++        let Some(embedded) = craft.iter().find(|f| designcraft_fonts::missing_chars(f.bytes, 0, "가힣").is_empty()) else {
++            eprintln!("skipped: no craft-fonts face has Hangul (built without CRAFT_FONTS_DIR, or a pin without Noto Sans CJK)");
++            return;
++        };
++        let defs = super::font_definitions(craft, "ko");
++        let hangul = catalog_hangul();
++        for family in families() {
++            assert_eq!(tofu(&defs, &family, &hangul), Vec::<char>::new(), "{family:?}");
++            let first_cjk = defs.families[&family].iter().find(|n| n.starts_with("craft-")).cloned();
++            assert_eq!(first_cjk, hangul_face(&defs, &family), "{family:?}: Hangul face first");
++            assert!(hangul_face(&defs, &family).is_some_and(|n| n.starts_with(&format!("craft-{}-", embedded.family))), "{family:?}");
++        }
++        // egui itself finds the glyphs.
++        let ctx = egui::Context::default();
++        ctx.set_fonts(defs);
++        let mut output = ctx.run_ui(egui::RawInput::default(), |_| {});
++        output.textures_delta.clear();
++        ctx.fonts_mut(|fonts| {
++            for family in [FontFamily::Proportional, FontFamily::Name("semibold".into())] {
++                let font = egui::FontId::new(13.0, family);
++                for ch in "한국어 텍스트 프레임 단락 스타일".chars().filter(|c| !c.is_whitespace()) {
++                    assert!(fonts.has_glyph(&font, ch), "missing {ch} in {font:?}");
++                }
++            }
++        });
++    }
++
++    /// Without a craft-fonts Hangul face (the release pin abb83316 has none) the Korean UI loads
++    /// an installed one: Malgun Gothic on Windows. Skipped where none is installed.
++    #[test]
++    fn korean_ui_without_craft_hangul_uses_an_installed_face() {
++        assert_eq!(super::HANGUL_UI_FAMILIES.first(), Some(&"Malgun Gothic"), "Windows first");
++        let Some(face) = super::system_hangul_face() else {
++            eprintln!("skipped: no installed Hangul face among {:?}", super::HANGUL_UI_FAMILIES);
++            return;
++        };
++        eprintln!("installed Hangul face: {} (index {})", face.family, face.index);
++        let defs = super::font_definitions(&[], "ko");
++        let hangul = catalog_hangul();
++        for family in families() {
++            assert_eq!(tofu(&defs, &family, &hangul), Vec::<char>::new(), "{family:?}");
++            assert!(hangul_face(&defs, &family).is_some(), "{family:?}");
++        }
++        // The face has every Hangul syllable, not only the catalog's.
++        let all: String = (0xAC00..=0xD7A3).filter_map(char::from_u32).collect();
++        assert_eq!(designcraft_fonts::missing_chars(face.bytes(), face.index, &all), Vec::<char>::new());
++    }
++
++    /// Other languages don't scan the installed fonts for Hangul (no startup cost, no change).
++    #[test]
++    fn other_languages_load_no_installed_hangul_face() {
++        for lang in ["", "ja", "zh", "ar"] {
++            let defs = super::font_definitions(&[], lang);
++            assert!(!defs.font_data.keys().any(|n| n.starts_with("system-")), "{lang}");
++        }
++    }
++}
++
+ #[cfg(test)]
+ mod ukrainian_font_tests {
+     #[test]
+diff --git a/crates/ui-egui/src/toolbar.rs b/crates/ui-egui/src/toolbar.rs
+index 5a5e1f0..f9b5f4e 100644
+--- a/crates/ui-egui/src/toolbar.rs
++++ b/crates/ui-egui/src/toolbar.rs
+@@ -74,10 +74,7 @@ pub fn show(app: &mut DesignApp, ui: &mut egui::Ui) {
+                                 let g = TOOL_GROUPS[gi];
+                                 let shown = g.iter().find(|tl| tl.id == current).unwrap_or(&g[0]);
+                                 let active = g.iter().any(|tl| tl.id == current);
+-                                let tip = match shown.shortcut {
+-                                    Some(s) => format!("{} ({s})", shown.label),
+-                                    None => shown.label.to_string(),
+-                                };
++                                let tip = tool_tip(&app.ui.language, shown);
+                                 let resp = tool_button(ui, shown.icon, active, &tip);
+                                 if g.len() > 1 {
+                                     // Flyout triangle.
+@@ -135,7 +132,7 @@ pub fn show(app: &mut DesignApp, ui: &mut egui::Ui) {
+                                                         ui.painter().text(
+                                                             r.min + vec2(28.0, 12.0),
+                                                             egui::Align2::LEFT_CENTER,
+-                                                            tl.label,
++                                                            crate::i18n::tr(&app.ui.language, tl.label),
+                                                             egui::FontId::proportional(12.5),
+                                                             t.text,
+                                                         );
+@@ -411,6 +408,15 @@ fn tool_button(ui: &mut egui::Ui, icon: &str, active: bool, tip: &str) -> egui::
+     })
+ }
+ 
++/// A tool's tooltip and accessible name: its name in `lang`, then its shortcut.
++fn tool_tip(lang: &str, tool: &designcraft_tools::ToolInfo) -> String {
++    let name = crate::i18n::tr(lang, tool.label);
++    match tool.shortcut {
++        Some(s) => format!("{name} ({s})"),
++        None => name.to_string(),
++    }
++}
++
+ #[cfg(test)]
+ mod tests {
+     use egui::{pos2, vec2};
+@@ -418,6 +424,20 @@ mod tests {
+ 
+     use crate::test_window::{self, wheel};
+ 
++    /// Tool names follow the interface language; shortcuts stay as they are.
++    #[test]
++    fn tool_tips_are_translated() {
++        let zoom = designcraft_tools::tool_info("zoom").unwrap();
++        assert_eq!(super::tool_tip("", &zoom), LAST_TOOL);
++        assert_eq!(super::tool_tip("ko", &zoom), "돋보기 도구 (Z)");
++        let selection = designcraft_tools::tool_info("selection").unwrap();
++        assert_eq!(super::tool_tip("ko", &selection), "선택 도구 (V)");
++        // Every tool has a Korean name.
++        for tool in designcraft_tools::TOOL_GROUPS.iter().flat_map(|g| g.iter()) {
++            assert_ne!(crate::i18n::tr("ko", tool.label), tool.label, "{}", tool.id);
++        }
++    }
++
+     /// The last tool group's button and the Fill proxy, near the bottom of the panel.
+     const LAST_TOOL: &str = "Zoom Tool (Z)";
+     const FILL: &str = "Fill (X)";
+diff --git a/docs/gaps.md b/docs/gaps.md
+index 6f92c55..2e67824 100644
+--- a/docs/gaps.md
++++ b/docs/gaps.md
+@@ -192,7 +192,7 @@ Kind: **F** feature · **U** UI/UX · **T** typography · **FF** file format ·
+ ## Lower
+ 
+ ### 21. Localization breadth (L)
+-- **Missing:** Hindi, Indonesian, Korean, Vietnamese interfaces; ~17% of strings in the 83–85%
++- **Missing:** Hindi, Indonesian, Vietnamese interfaces (Korean landed 2026-10-13); ~17% of strings in the 83–85%
+   languages; 39% of pt-BR; native-speaker review for all. **Estimate:** 120–180 h.
+   **Doc:** [localization-parity.md](localization-parity.md)
+ 
+diff --git a/docs/localization-ko.md b/docs/localization-ko.md
+new file mode 100644
+index 0000000..200aa50
+--- /dev/null
++++ b/docs/localization-ko.md
+@@ -0,0 +1,139 @@
++# Korean interface (ko)
++
++> **Last updated:** 2026-10-13 · **Change:** major (Korean interface added on 0.7.1)
++
++Edit › Interface Language › 한국어 (`app.language {"lang": "ko"}`). A first launch (no saved
++`ui.json`) on a Korean system starts in Korean (see [System locale](#system-locale)). Related:
++[localization-parity.md](localization-parity.md), [cjk.md](cjk.md) (Korean typesetting).
++
++## Provenance
++
++The catalog is `crates/ui-egui/src/i18n/ko.rs` (English → Korean, one row per string).
++
++| Rows | Source |
++|---|---|
++| 1,747 | **con3code**, [storytold/designcraft PR #395](https://github.com/storytold/designcraft/pull/395) "i18n: Traditional Chinese and Korean interfaces; full Chinese tables" (commit `66c4565`, 2026-10-11). Only its Korean table, the language registry row, the language menu entry, the language-menu test and the Tools-panel tooltip hook were taken; its Traditional and Simplified Chinese tables were not. |
++| of which 1,655 | kept verbatim |
++| of which 92 | revised for 0.7.1: Korean InDesign terms (오브젝트 → 개체, 윈도우 → 창, 도련 → 재단 여백, 사전 검사 → 프리플라이트, 지우기 도구 → 지우개 도구), 해요체 → 합니다체 (-세요 → -십시오), count nouns for `count_label` (개 오류 → 오류, shown as 오류 3개) |
++| 16 | new: 0.7.1 strings the PR doesn't have (panel docking actions, the unsaved-changes prompt, empty-panel hints) |
++| **1,763** | total |
++
++All 1,747 PR rows are still strings of the 0.7.1 interface; none was dropped. The rows after the
++`DesignCraft 0.7.1` comment in `ko.rs` are the new ones.
++
++### Coverage
++
++The reference catalog is measured as in [localization-parity.md](localization-parity.md): every
++catalog's keys, every engine command label and menu path, the UI command labels, the menu
++titles and labels, the tool names and every literal passed to `tr`/`tr_context` in the UI crate.
++For 0.7.1 that is **1,775 strings**; Korean has **1,763 (99.3%)**. The 12 without a row stay
++English on purpose: field captions that are the same in Korean InDesign (`W:`, `H:`, `X:`,
++`Y:`), glyph captions (`IT`, `VA`, `×`) and test-only strings (`A custom name`, `Custom caption`,
++`Something new`, `Unknown label`, `Low Quality Print`). Korean covers every string the Japanese
++table covers (all 1,643 rows of `ja.rs`; enforced by a test).
++
++## Terminology
++
++Korean InDesign's terms, as Korean users know them. Menus and buttons are short nouns or noun
++phrases (저장, 새 문서…, 창에 페이지 맞추기); messages are 합니다체 (…없습니다, …선택하십시오,
++…저장하시겠습니까?).
++
++| English | Korean | Note |
++|---|---|---|
++| Text Frame | 텍스트 프레임 | |
++| Graphics frame | 그래픽 프레임 | no 0.7.1 string uses it yet; Graphic → 그래픽 |
++| Parent page (formerly Master page) | 상위 페이지 | InDesign 2022+ name; "마스터 페이지" in older versions |
++| Paragraph Styles | 단락 스타일 | |
++| Character Styles | 문자 스타일 | |
++| Tracking | 자간 | |
++| Leading | 행간 | |
++| Kerning | 커닝 | |
++| Text Wrap | 텍스트 감싸기 | |
++| Layers | 레이어 | |
++| Swatches | 견본 | |
++| Pages | 페이지 | |
++| Spread | 펼침면 | |
++| Export | 내보내기 | |
++| Package | 패키지 | |
++| Preflight | 프리플라이트 | |
++| Bleed | 재단 여백 | "도련" in older Korean prepress usage |
++| Slug | 슬러그 | |
++| Object (menu, styles) | 개체 | 고정된 개체 (anchored object), 개체 스타일 |
++| Window (menu) | 창 | 새 창, 창 분할 |
++| Place | 가져오기 | |
++| Type (menu) / Type Tool | 문자 / 문자 도구 | tools are "… 도구" |
++| Stroke / Fill | 획 / 칠 | |
++| Preferences | 환경 설정 | |
++
++Never translated: placeholders (`{name}`, `{}`), units (pt, mm, %), file formats and technology
++names (PDF, PDF/X-4, IDML, EPUB, CMYK, RGB, ICC, JPEG, PNG, SVG, CSV, MCP, URL), shortcuts.
++
++Counts read noun, number, counter: `count_label("ko", "errors", 3)` is "오류 3개".
++
++## UI font (Hangul)
++
++Korean doesn't depend on craft-fonts. `theme::font_definitions` picks the Hangul face for the
++interface:
++
++1. **An embedded craft-fonts face with Hangul**, when the build has one (craft-fonts `8dcdacd`
++   embeds Noto Sans CJK SC, which has all 11,172 syllables). With Korean selected it comes
++   ahead of the Japanese and Chinese faces in every family.
++2. **Otherwise, an installed face** (desktop only), looked up once per run and only when Korean
++   is selected: first the usual files in the system font folders without a font scan —
++   `malgun.ttf` (Malgun Gothic) on Windows, `AppleSDGothicNeo.ttc` on macOS — then by family
++   through the font database: Malgun Gothic, Apple SD Gothic Neo, Noto Sans CJK KR, Noto Sans
++   KR, Source Han Sans K, Source Han Sans KR, NanumGothic, Noto Sans CJK SC, Noto Sans CJK JP,
++   Source Han Sans SC, Gulim, Dotum. A face counts only if it has Hangul; the choice is logged.
++
++**Windows:** a release built with the craft-fonts pin `abb83316` (BIZ UD Gothic/Mincho and
++Shippori only, no Hangul) draws the Korean UI with **Malgun Gothic Regular** from
++`%WINDIR%\Fonts\malgun.ttf` (face 0), which every Windows since Vista has, Korean or not. A
++build with craft-fonts `8dcdacd` or later uses the embedded **Noto Sans CJK SC** instead and
++reads no system font. No font files were added to this repository.
++
++## System locale
++
++`i18n::language_for_locale` maps a locale to an interface language; `i18n::system_language`
++reads the system's. `ko`, `ko-KR`, `ko_KR`, `ko_KR.UTF-8` (any case, encoding or modifier) are
++Korean. The other interface languages map the same way (`ja_JP.UTF-8` → ja, `pt_BR` → pt-br,
++`zh_CN` → zh); English, unsupported languages and Traditional Chinese (`zh_TW`, `zh-Hant`) stay
++English. Sources: Windows — the user's `LocaleName` (Settings › Time & language › Region,
++`HKCU\Control Panel\International`, read with `reg.exe`, no console window), then the variables
++below; elsewhere — the first set of `LC_ALL`, `LC_MESSAGES`, `LANG` (POSIX order). The app applies
++it only when there is no saved `ui.json` (and never with `DESIGNCRAFT_NO_PREFS`), so a language
++chosen in Edit › Interface Language is kept.
++
++## Tests
++
++`cargo test -p designcraft-ui-egui --lib -- korean interface_language_menu tool_tips system_locales`
++
++| Test | Checks |
++|---|---|
++| `i18n::tests::korean_catalog_covers_the_japanese_one` | registry row 한국어, unique non-empty rows, `tr("ko", …)` returns them, every ja.rs key has Korean, unknown strings stay English |
++| `i18n::tests::korean_rows_are_live_and_keep_placeholders` | every row is a string the UI shows (catalog key, command label or menu path, UI command, menu label, tool name); placeholders, trailing ellipsis, units and format names kept |
++| `i18n::tests::korean_uses_indesign_terminology` | the terms above; no 해요체 endings; none of 오브젝트, 윈도우, 도련, 사전 검사, 마스터 |
++| `i18n::tests::korean_counts_put_the_counter_after_the_number` | 오류 3개, 개체 2개 |
++| `i18n::tests::system_locales_select_the_interface_language` | `ko`, `ko-KR`, `ko_KR.UTF-8`, … → ko; English, `zh_TW`, malformed input → English; `reg query` output parsing |
++| `menus::tests::interface_language_menu_lists_every_language` | Edit › Interface Language lists every language (한국어 included) and each switches; every Korean menu title translated (from PR #395) |
++| `toolbar::tests::tool_tips_are_translated` | Tools-panel tooltips: 돋보기 도구 (Z); every tool has a Korean name |
++| `theme::korean_font_tests::korean_ui_uses_the_embedded_hangul_face` | with a craft-fonts Hangul face: no catalog syllable without a glyph in any family, the Hangul face first; skipped (with a message) without one |
++| `theme::korean_font_tests::korean_ui_without_craft_hangul_uses_an_installed_face` | Malgun Gothic tried first; with an installed Hangul face: no catalog syllable missing in any family and all 11,172 syllables in the face; skipped (with a message) where none is installed |
++| `theme::korean_font_tests::other_languages_load_no_installed_hangul_face` | other languages don't scan system fonts |
++
++## Limits
++
++- **No canvas IME** (#322). The Type tool on the canvas reads `egui::Event::Text`, `Paste`,
++  `Copy`/`Cut` and `Key` only (`canvas.rs`); it doesn't handle `egui::Event::Ime` (`Enabled`,
++  `Preedit`, `Commit`, `Disabled`) and never sets `PlatformOutput::ime`, so the window doesn't
++  ask for IME input and Hangul can't be composed on the canvas. Text fields, the Notes panel and
++  the Story Editor (Edit › Edit in Story Editor) are egui `TextEdit`s, which handle IME
++  themselves, so Korean should compose there; by egui's `TextEdit` design each Story Editor
++  composition (preedit) step would reach the story as an edit (not yet checked on Windows). Use the Story Editor or paste Korean text until the canvas IME lands.
++- Without a craft-fonts Hangul face and without an installed one (Linux without Korean fonts,
++  the web build) Hangul in the UI shows as boxes. Other interface languages don't load the
++  installed Hangul face, so the 한국어 item of the language menu shows boxes there unless the
++  build embeds a Hangul face (as 日本語 and 简体中文 do without craft-fonts).
++- The Korean UI's bold (semibold) text uses the regular Hangul face when it comes from the system.
++- The web build doesn't read the browser's language.
++- Native-speaker review: the catalog was written and revised by machine translation agents
++  against Korean InDesign terminology; it has not had a human review yet.
+diff --git a/docs/localization-parity.md b/docs/localization-parity.md
+index d360532..651ce7a 100644
+--- a/docs/localization-parity.md
++++ b/docs/localization-parity.md
+@@ -37,7 +37,7 @@ come as Middle East editions with an English or French interface and right-to-le
+ | Indonesian | id | ✗ | 0 (0%) | none | Latin ✓ | no | none | 12–18 |
+ | Japanese | ja | ✓ | 1,644 (95%) | whole interface (#272), vertical-type commands; no help | vertical text, kinsoku, aki, ruby, warichu ✓ (partial depth, cjk.md); **no canvas IME** (#322); Japanese UI and Mincho fonts from craft-fonts | no | partial | 6–10 (+ IME, shared with zh) |
+ | German | de | ✓ | 1,438 (83%) | menus, panels, most dialogs; no help | Latin ✓; no German hyphenation (InDesign ships 2006 reform patterns) | no | partial | 6–10 |
+-| Korean | ko | ✓ | 0 (0%) | none | Korean line breaking at spaces ✓; **no IME** (#322) | no | none | 15–25 |
++| Korean | ko | ✓ | 1,763 of 1,775 on 0.7.1 (99%; [localization-ko.md](localization-ko.md)) | whole interface incl. tool tooltips; no help | Korean line breaking at spaces ✓; Hangul UI face embedded or installed (Malgun Gothic on Windows); **no canvas IME** (#322) | no | partial | 3–5 (+ IME, shared with zh, ja) |
+ | Vietnamese | vi | ✗ | 0 (0%) | none | Latin with stacked diacritics via harfrust, untested | no | none | 12–18 |
+ 
+ Percentages are of the 1,724 measured strings. A language is `full` only when every user-visible
+@@ -66,7 +66,7 @@ locale shaping. See [typography-parity.md](typography-parity.md).
+ |---|---|
+ | Fill the 83–85% catalogs (de, fr, es, zh, ar, it, uk; ~290 strings each) | 25–40 |
+ | pt-BR to full | 8–12 |
+-| New: Hindi, Indonesian, Korean, Vietnamese (1,724 strings, plural rules, tests) | 50–75 |
++| New: Hindi, Indonesian, Vietnamese (1,724 strings, plural rules, tests) | 40–55 |
+ | Canvas IME (zh, ja, ko) | 10–20 |
+ | CJK UI font in every release build; Devanagari and Vietnamese rendering tests | 10–15 |
+ | Catalog completeness test: every `tr` key and command label present in every catalog | 4–8 |
+@@ -77,4 +77,5 @@ locale shaping. See [typography-parity.md](typography-parity.md).
+ 
+ | Date | Change | Summary |
+ |---|---|---|
++| 2026-10-13 | minor | Korean interface (1,763 of 1,775 strings measured on 0.7.1), from PR #395 by con3code; see localization-ko.md |
+ | 2026-10-10 | major | Created: catalogs measured (1,724 strings), the twelve key languages plus Italian and Ukrainian |
+diff --git a/docs/target-app-parity.md b/docs/target-app-parity.md
+index e9c27a9..60fe243 100644
+--- a/docs/target-app-parity.md
++++ b/docs/target-app-parity.md
+@@ -64,7 +64,7 @@ they receive, setting type exactly, and basic editing that never fails.
+ | UI/UX fidelity | 15% | 45% | 120–180 | Measured InDesign 2026 look; but users report object copy/paste (#351, #348, #185, #164), right-click menus (#238, #187, #160), out-port threading (#352, #194, #165), canvas IME (#322) failing | [ui-parity.md](ui-parity.md) |
+ | Stability | 10% | 45% | 60–100 | Never-crash rules and last-resort guards; startup failures on some GPUs and machines (#334, #273, #220, #192, #167, #166); no CI runs the tests on pull requests | [gaps.md](gaps.md) |
+ | Performance | 5% | 65% | 40–80 | 300k characters compose in ~38 ms warm; typing repaints in < 1 ms (damage regions); no incremental composition; nothing benchmarked against InDesign; no large real documents | [gaps.md](gaps.md) |
+-| Localization | 3% | 45% | 120–180 | 9 translations beyond English; Japanese 95%, most others 83–85%, pt-BR 61%; Hindi, Indonesian, Korean, Vietnamese none | [localization-parity.md](localization-parity.md) |
++| Localization | 3% | 45% | 120–180 | 10 translations beyond English; Korean 99% (of 0.7.1's strings), Japanese 95%, most others 83–85%, pt-BR 61%; Hindi, Indonesian, Vietnamese none | [localization-parity.md](localization-parity.md) |
+ | Platforms | 3% | 55% | 40–80 | macOS is where it's tested; Windows and Linux users hit basic failures; web and FreeBSD builds exist | [hardware-parity.md](hardware-parity.md) |
+ | Hardware | 2% | 45% | 20–40 | Canvas rasterizes on the CPU (vello_cpu, multithreaded); GPU only presents; printing uses shared CUPS/Windows PDF spoolers (no PostScript; physical output needs validation) | [hardware-parity.md](hardware-parity.md) |
+ | Ecosystem (scripting, plug-ins) | 2% | 15% | 150–250 | Own command/script/MCP API is strong; no ExtendScript/UXP DOM, so InDesign scripts don't run; no plug-ins | [gaps.md](gaps.md) |
